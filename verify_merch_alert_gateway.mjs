@@ -11,6 +11,8 @@ const scriptProperties = new Map([
   ['MNT_ALERT_RESERVED_QUOTA', '40']
 ]);
 const pushes = [];
+const allMessageLogs = [];
+let allMessageLogShouldFail = false;
 let quotaUsage = 20;
 
 const byteArray = buffer => Array.from(buffer, value => value > 127 ? value - 256 : value);
@@ -25,6 +27,16 @@ const utilities = {
   },
   base64EncodeWebSafe(bytes) {
     return Buffer.from(bytes.map(value => (value + 256) % 256)).toString('base64url');
+  },
+  formatDate(date, _timezone, format) {
+    const value = new Date(date);
+    const parts = new Intl.DateTimeFormat('zh-TW', {
+      timeZone: 'Asia/Taipei', year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', hourCycle: 'h23'
+    }).formatToParts(value).reduce((result, part) => ({ ...result, [part.type]: part.value }), {});
+    if (format === 'yyyyMM') return `${parts.year}${parts.month}`;
+    if (format === 'MM/dd HH:mm') return `${parts.month}/${parts.day} ${parts.hour}:${parts.minute}`;
+    throw new Error(`unexpected date format: ${format}`);
   }
 };
 
@@ -75,6 +87,11 @@ const context = {
     })
   },
   getToken: () => 'test-token',
+  logAllMessages(...args) {
+    allMessageLogs.push(args);
+    if (allMessageLogShouldFail) throw new Error('simulated ALL write failure');
+    return true;
+  },
   writeLog() {}
 };
 
@@ -105,30 +122,119 @@ assert.equal(pushes.length, 0);
 
 const dryRun = handle(signedPayload({ eventId: 'dry-run', dryRun: true }));
 assert.equal(dryRun.ok, true);
-assert.equal(dryRun.dryRun, true);
-assert.equal(dryRun.expectedCost, 4);
+assert.equal(dryRun.suppressed, true);
+assert.equal(dryRun.expectedCost, 0);
 assert.equal(pushes.length, 0);
 
 const sent = handle(signedPayload());
 assert.equal(sent.ok, true);
-assert.equal(sent.sent, true);
+assert.equal(sent.suppressed, true);
+assert.equal(sent.expectedCost, 0);
+assert.equal(pushes.length, 0);
+assert.equal(allMessageLogs.length, 0);
+
+const ordinaryPhotoAi = handle(signedPayload({
+  eventId: 'ordinary-photo-ai',
+  message: '【需主管留意｜現場回報】\nM001 測試門市｜測試人員\n問題：照片 AI 判定 FollowMe 或舊型號待確認'
+}));
+assert.equal(ordinaryPhotoAi.ok, true);
+assert.equal(ordinaryPhotoAi.suppressed, true);
+assert.equal(ordinaryPhotoAi.expectedCost, 0);
+assert.equal(pushes.length, 0);
+assert.equal(allMessageLogs.length, 0);
+
+const trulyCritical = handle(signedPayload({
+  eventId: 'truly-critical',
+  message: '【需主管留意｜現場回報】\nM001 測試門市｜測試人員\n問題：定位距離異常'
+}));
+assert.equal(trulyCritical.ok, true);
+assert.equal(trulyCritical.sent, true);
+assert.equal(trulyCritical.allLogSaved, true);
 assert.equal(pushes.length, 1);
+assert.equal(allMessageLogs.length, 1);
+const sentAllLog = allMessageLogs[0];
+assert.equal(sentAllLog[1], 'MNT_PUSH:truly-critical');
+assert.equal(sentAllLog[4], scriptProperties.get('MNT_ALERT_GROUP_ID'));
+assert.equal(sentAllLog[5], '主動通知/field_critical');
+assert.match(sentAllLog[6], /定位距離異常/);
+assert.match(sentAllLog[7], /PUSH成功/);
+assert.match(sentAllLog[7], /類別：field_critical/);
+assert.match(sentAllLog[7], /預估額度：4/);
+assert.match(sentAllLog[7], /LINE請求編號：test-request-id/);
 assert.equal(pushes[0].body.to, scriptProperties.get('MNT_ALERT_GROUP_ID'));
 assert.match(pushes[0].options.headers['X-Line-Retry-Key'], /^[0-9a-f-]{36}$/);
 
-const duplicate = handle(signedPayload());
+const taskMappingCritical = handle(signedPayload({
+  eventId: 'task-mapping-critical',
+  message: '【需主管留意｜現場回報】\nM002 測試門市｜測試人員\n問題：回報無法對應本月任務'
+}));
+assert.equal(taskMappingCritical.ok, true);
+assert.equal(taskMappingCritical.sent, true);
+assert.equal(pushes.length, 2);
+assert.equal(allMessageLogs.length, 2);
+
+const duplicate = handle(signedPayload({
+  eventId: 'truly-critical',
+  message: '【需主管留意｜現場回報】\nM001 測試門市｜測試人員\n問題：定位距離異常'
+}));
 assert.equal(duplicate.ok, true);
 assert.equal(duplicate.duplicate, true);
-assert.equal(pushes.length, 1);
+assert.equal(pushes.length, 2);
+assert.equal(allMessageLogs.length, 2);
+
+const statusSnapshot = {
+  v: 1,
+  month: '202607',
+  updatedAt: new Date().toISOString(),
+  progress: { reported: 56, total: 280, percent: 20, unreported: 224 },
+  issues: { photo: 3, gps: 2, task: 1, other: 0 },
+  service: { status: 'ok', summary: '正常', checkedAt: new Date().toISOString() },
+  links: {
+    manager: 'https://script.google.com/macros/s/test/exec',
+    fieldReport: 'https://mnt-field-report-wrapper.zeabur.app',
+    guide: 'https://mnt-field-report-wrapper.zeabur.app/guide'
+  }
+};
+const synced = handle(signedPayload({
+  eventId: 'status-snapshot',
+  category: 'status_snapshot',
+  message: JSON.stringify(statusSnapshot)
+}));
+assert.equal(synced.ok, true);
+assert.equal(synced.synced, true);
+assert.equal(synced.expectedCost, 0);
+assert.equal(pushes.length, 2);
+assert.equal(allMessageLogs.length, 2);
+const statusReply = context.buildMntMerchStatusReply_(scriptProperties.get('MNT_ALERT_GROUP_ID'));
+assert.match(statusReply, /進度：56 \/ 280 店（20%）/);
+assert.match(statusReply, /\?page=situation/);
+assert.match(statusReply, /前線回報：https:\/\/mnt-field-report-wrapper\.zeabur\.app/);
+assert.equal(context.buildMntMerchStatusReply_(`C${'2'.repeat(32)}`), '此指令只提供商化管理群組使用。');
 
 quotaUsage = 170;
 const reserved = handle(signedPayload({ eventId: 'reserved', category: 'progress' }));
 assert.equal(reserved.ok, false);
 assert.match(reserved.error, /保留給系統故障通知/);
-assert.equal(pushes.length, 1);
+assert.equal(pushes.length, 2);
 
 const emergency = handle(signedPayload({ eventId: 'emergency', category: 'system_down' }));
 assert.equal(emergency.ok, true);
-assert.equal(pushes.length, 2);
+assert.equal(pushes.length, 3);
+assert.equal(allMessageLogs.length, 3);
+const downSnapshot = JSON.parse(scriptProperties.get('MNT_MERCH_STATUS_SNAPSHOT'));
+assert.equal(downSnapshot.service.status, 'down');
+
+quotaUsage = 20;
+allMessageLogShouldFail = true;
+const allLogFailure = handle(signedPayload({ eventId: 'all-log-failure', category: 'system_down' }));
+assert.equal(allLogFailure.ok, true);
+assert.equal(allLogFailure.sent, true);
+assert.equal(allLogFailure.allLogSaved, false);
+assert.equal(pushes.length, 4);
+assert.equal(allMessageLogs.length, 4);
+const allLogFailureDuplicate = handle(signedPayload({ eventId: 'all-log-failure', category: 'system_down' }));
+assert.equal(allLogFailureDuplicate.duplicate, true);
+assert.equal(pushes.length, 4);
+assert.equal(allMessageLogs.length, 4);
 
 console.log('LINEBOT merch alert gateway verification passed');

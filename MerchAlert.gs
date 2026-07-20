@@ -5,6 +5,8 @@ var MNT_ALERT_SECRET_PROPERTY = 'MNT_ALERT_SECRET';
 var MNT_ALERT_MONTHLY_LIMIT_PROPERTY = 'MNT_ALERT_MONTHLY_LIMIT';
 var MNT_ALERT_RESERVED_QUOTA_PROPERTY = 'MNT_ALERT_RESERVED_QUOTA';
 var MNT_ALERT_RECENT_EVENTS_PROPERTY = 'MNT_ALERT_RECENT_EVENTS';
+var MNT_MERCH_STATUS_SNAPSHOT_PROPERTY = 'MNT_MERCH_STATUS_SNAPSHOT';
+var MNT_ALERT_MANAGEMENT_GROUP_ID = 'C19c9d03e3605481d85c45982aa814e60';
 var MNT_ALERT_DEFAULT_MONTHLY_LIMIT = 200;
 var MNT_ALERT_DEFAULT_RESERVED_QUOTA = 40;
 var MNT_ALERT_ALLOWED_CATEGORIES = [
@@ -13,6 +15,8 @@ var MNT_ALERT_ALLOWED_CATEGORIES = [
   'system_recovered',
   'progress',
   'field_critical',
+  'status_snapshot',
+  'feature_announcement',
   'integration_test'
 ];
 var MNT_ALERT_EMERGENCY_CATEGORIES = [
@@ -94,6 +98,13 @@ function constantTimeEqualsMntAlert_(left, right) {
 
 function processMntAlertRequest_(request) {
   var props = PropertiesService.getScriptProperties();
+  if (request.category === 'status_snapshot') {
+    return storeMntMerchStatusSnapshot_(request, props);
+  }
+  updateMntMerchServiceFromAlert_(request, props);
+  if (request.category === 'field_critical' && !isMntAlertTrulyCritical_(request.message)) {
+    return { suppressed: true, eventId: request.eventId, expectedCost: 0 };
+  }
   var recentEvents = readRecentMntAlertEvents_(props);
   if (recentEvents.indexOf(request.eventId) >= 0) {
     return { duplicate: true, eventId: request.eventId, quota: getMntAlertQuotaSnapshot_() };
@@ -115,15 +126,157 @@ function processMntAlertRequest_(request) {
   var groupId = props.getProperty(MNT_ALERT_GROUP_PROPERTY) || '';
   if (!/^C[a-f0-9]{32}$/i.test(groupId)) throw new Error('商化管理群組尚未設定');
   var response = pushMntAlertMessage_(groupId, request.message, request.eventId, request.category);
+  var allLogSaved = logMntAlertSuccessToAll_(request, groupId, response, expectedCost);
   recentEvents.unshift(request.eventId);
   props.setProperty(MNT_ALERT_RECENT_EVENTS_PROPERTY, JSON.stringify(recentEvents.slice(0, 240)));
   return {
     sent: true,
     eventId: request.eventId,
     lineRequestId: response.requestId,
+    allLogSaved: allLogSaved,
     quota: quota,
     expectedCost: expectedCost
   };
+}
+
+function isMntAlertTrulyCritical_(message) {
+  var value = String(message || '');
+  return /問題[：:]\s*(?:定位距離異常|回報無法對應本月任務)/.test(value);
+}
+
+function pauseMntMerchPush() {
+  PropertiesService.getScriptProperties().deleteProperty(MNT_ALERT_GROUP_PROPERTY);
+  console.log('商化 LINE PUSH 已暫停');
+  return { ok: true, paused: true };
+}
+
+function configureMntMerchManagementGroup() {
+  var props = PropertiesService.getScriptProperties();
+  props.setProperty(MNT_ALERT_GROUP_PROPERTY, MNT_ALERT_MANAGEMENT_GROUP_ID);
+  var result = inspectMntAlertQuota();
+  console.log('商化管理群組已設為 ' + MNT_ALERT_MANAGEMENT_GROUP_ID);
+  return result;
+}
+
+function inspectMntAlertQuota() {
+  var groupId = PropertiesService.getScriptProperties().getProperty(MNT_ALERT_GROUP_PROPERTY) || '';
+  var quota = getMntAlertQuotaSnapshot_();
+  var result = {
+    groupId: groupId,
+    memberCount: /^C[a-f0-9]{32}$/i.test(groupId) ? getMntAlertGroupMemberCount_() : 0,
+    quota: quota
+  };
+  console.log(JSON.stringify(result));
+  return result;
+}
+
+function storeMntMerchStatusSnapshot_(request, props) {
+  if (request.dryRun) return { dryRun: true, synced: false, eventId: request.eventId, expectedCost: 0 };
+  var snapshot = parseMntAlertJson_(request.message);
+  if (!snapshot || Number(snapshot.v) !== 1 || !/^\d{6}$/.test(String(snapshot.month || ''))) {
+    throw new Error('商化狀態快照格式不正確');
+  }
+  snapshot.receivedAt = new Date(request.timestamp).toISOString();
+  props.setProperty(MNT_MERCH_STATUS_SNAPSHOT_PROPERTY, JSON.stringify(snapshot));
+  return { synced: true, eventId: request.eventId, expectedCost: 0 };
+}
+
+function updateMntMerchServiceFromAlert_(request, props) {
+  var statuses = {
+    system_down: 'down',
+    system_action_required: 'degraded',
+    system_recovered: 'ok'
+  };
+  var status = statuses[request.category];
+  if (!status) return;
+  var snapshot = readMntMerchStatusSnapshot_(props) || { v: 1, month: formatMntStatusMonth_(new Date(request.timestamp)) };
+  snapshot.updatedAt = new Date(request.timestamp).toISOString();
+  snapshot.service = {
+    status: status,
+    summary: String(request.message || '').split('\n').slice(0, 3).join('｜').slice(0, 240),
+    checkedAt: new Date(request.timestamp).toISOString()
+  };
+  props.setProperty(MNT_MERCH_STATUS_SNAPSHOT_PROPERTY, JSON.stringify(snapshot));
+}
+
+function readMntMerchStatusSnapshot_(props) {
+  try {
+    var parsed = JSON.parse((props || PropertiesService.getScriptProperties()).getProperty(MNT_MERCH_STATUS_SNAPSHOT_PROPERTY) || 'null');
+    return parsed && typeof parsed === 'object' ? parsed : null;
+  } catch (error) {
+    return null;
+  }
+}
+
+function buildMntMerchStatusReply_(groupId) {
+  var props = PropertiesService.getScriptProperties();
+  var allowedGroupId = props.getProperty(MNT_ALERT_GROUP_PROPERTY) || '';
+  if (!groupId || groupId !== allowedGroupId) return '此指令只提供商化管理群組使用。';
+  var snapshot = readMntMerchStatusSnapshot_(props);
+  if (!snapshot) return '商化狀態尚未同步，請稍後再輸入 /商化。';
+  var progress = snapshot.progress || {};
+  var service = snapshot.service || {};
+  var issues = snapshot.issues || {};
+  var links = snapshot.links || {};
+  var managerBase = String(links.manager || '').replace(/[?&]page=[^&]*/g, '');
+  var updatedAt = new Date(snapshot.updatedAt || snapshot.receivedAt || 0);
+  var stale = !Number.isFinite(updatedAt.getTime()) || Date.now() - updatedAt.getTime() > 15 * 60 * 1000;
+  var serviceLabel = service.status === 'ok' ? '正常' : service.status === 'degraded' ? '部分功能異常' : service.status === 'down' ? '服務中斷' : '待確認';
+  var lines = [
+    '【MNT 商化即時狀態】',
+    stale ? '⚠ 狀態超過 15 分鐘未更新' : '服務：' + serviceLabel,
+    '進度：' + Number(progress.reported || 0) + ' / ' + Number(progress.total || 0) + ' 店（' + Number(progress.percent || 0) + '%）',
+    '待回報：' + Number(progress.unreported || 0) + ' 店',
+    '待處理：照片 ' + Number(issues.photo || 0) + '｜GPS ' + Number(issues.gps || 0) + '｜任務 ' + Number(issues.task || 0) + '｜其他 ' + Number(issues.other || 0),
+    '更新：' + formatMntStatusTime_(updatedAt)
+  ];
+  if (managerBase) {
+    lines.push('即時回應：' + managerBase + '?page=situation');
+    lines.push('商化查詢：' + managerBase + '?page=dashboard');
+    lines.push('照片查詢：' + managerBase + '?page=photos');
+    lines.push('型號管理：' + managerBase + '?page=models');
+  } else {
+    if (links.situation) lines.push('即時回應：' + links.situation);
+    if (links.dashboard) lines.push('商化查詢：' + links.dashboard);
+    if (links.photos) lines.push('照片查詢：' + links.photos);
+    if (links.models) lines.push('型號管理：' + links.models);
+  }
+  if (links.fieldReport) lines.push('前線回報：' + links.fieldReport);
+  if (links.guide) lines.push('回報說明：' + links.guide);
+  return lines.join('\n').slice(0, 4500);
+}
+
+function formatMntStatusMonth_(date) {
+  return Utilities.formatDate(date, 'Asia/Taipei', 'yyyyMM');
+}
+
+function formatMntStatusTime_(date) {
+  if (!(date instanceof Date) || !Number.isFinite(date.getTime())) return '未知';
+  return Utilities.formatDate(date, 'Asia/Taipei', 'MM/dd HH:mm');
+}
+
+function logMntAlertSuccessToAll_(request, groupId, response, expectedCost) {
+  var result = [
+    'PUSH成功',
+    '類別：' + request.category,
+    '預估額度：' + expectedCost,
+    response.requestId ? 'LINE請求編號：' + response.requestId : ''
+  ].filter(Boolean).join('｜');
+  try {
+    return logAllMessages(
+      new Date(request.timestamp || Date.now()),
+      'MNT_PUSH:' + request.eventId,
+      '',
+      'MNT 商化系統',
+      groupId,
+      '主動通知/' + request.category,
+      request.message,
+      result
+    ) === true;
+  } catch (error) {
+    writeLog('商化主動通知已送出，但 ALL 寫入失敗：' + (error && error.message ? error.message : error));
+    return false;
+  }
 }
 
 function pushMntAlertMessage_(groupId, message, eventId, category) {
