@@ -114,7 +114,11 @@ function sendMessage(replyToken, message) {
 
 function doPost(e) {
   try {
-    const events = JSON.parse(e.postData.contents).events;
+    const requestBody = JSON.parse(e && e.postData && e.postData.contents || '{}');
+    if (isMntAlertPayload_(requestBody)) {
+      return handleMntAlertRequest_(requestBody);
+    }
+    const events = requestBody.events;
     
     if (events && events.length > 0) {
       const event = events[0];
