@@ -9,6 +9,7 @@ var MNT_MERCH_STATUS_SNAPSHOT_PROPERTY = 'MNT_MERCH_STATUS_SNAPSHOT';
 var MNT_ALERT_MANAGEMENT_GROUP_ID = 'C19c9d03e3605481d85c45982aa814e60';
 var MNT_ALERT_DEFAULT_MONTHLY_LIMIT = 200;
 var MNT_ALERT_DEFAULT_RESERVED_QUOTA = 40;
+var MNT_ALERT_MESSAGE_MAX_LENGTH = 4500;
 var MNT_ALERT_ALLOWED_CATEGORIES = [
   'system_down',
   'system_action_required',
@@ -53,7 +54,7 @@ function normalizeMntAlertRequest_(payload) {
     timestamp: Number(payload.timestamp || 0),
     eventId: String(payload.eventId || '').trim().slice(0, 180),
     category: String(payload.category || '').trim(),
-    message: String(payload.message || '').trim().slice(0, 1200),
+    message: String(payload.message || '').trim().slice(0, MNT_ALERT_MESSAGE_MAX_LENGTH),
     dryRun: payload.dryRun === true,
     signature: String(payload.signature || '').trim()
   };

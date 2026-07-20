@@ -116,6 +116,17 @@ function handle(payload) {
   return JSON.parse(context.handleMntAlertRequest_(payload).text);
 }
 
+const longAnnouncement = context.normalizeMntAlertRequest_({
+  kind: 'mnt-alert-v1',
+  timestamp: Date.now(),
+  eventId: 'long-announcement',
+  category: 'feature_announcement',
+  message: '商'.repeat(5000),
+  dryRun: false,
+  signature: 'not-used-for-normalization'
+});
+assert.equal(longAnnouncement.message.length, 4500, 'formal link report must fit below LINE 5000-character text limit without the old 1200-character truncation');
+
 const invalid = handle({ ...signedPayload(), signature: 'invalid' });
 assert.equal(invalid.ok, false);
 assert.equal(pushes.length, 0);
