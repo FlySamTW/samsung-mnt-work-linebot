@@ -56,7 +56,7 @@ function handleCommand(replyToken, userMessage, timestamp, messageId, userId, gr
 // 幫助訊息
 function getHelpMessage() {
   return "我可以幫忙大家：\n\n" +
-    "/商化：查看商化進度與管理連結\n" +
+    "/商化：查看商化進度摘要\n" +
     "/紀錄：紀錄訊息\n" +
     "/查詢：所有未處理訊息\n" +
     "/完成：標誌為已完成\n" +

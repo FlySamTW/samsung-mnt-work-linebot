@@ -217,9 +217,12 @@ assert.equal(synced.expectedCost, 0);
 assert.equal(pushes.length, 2);
 assert.equal(allMessageLogs.length, 2);
 const statusReply = context.buildMntMerchStatusReply_(scriptProperties.get('MNT_ALERT_GROUP_ID'));
+assert.match(statusReply, /【2026\/07 MNT 商化摘要】/);
 assert.match(statusReply, /進度：56 \/ 280 店（20%）/);
-assert.match(statusReply, /\?page=situation/);
-assert.match(statusReply, /前線回報：https:\/\/mnt-field-report-wrapper\.zeabur\.app/);
+assert.match(statusReply, /待處理：6 項\n照片 3｜定位 2｜任務 1｜其他 0/);
+assert.doesNotMatch(statusReply, /https?:\/\//);
+assert.doesNotMatch(statusReply, /\?page=/);
+assert.ok(statusReply.length <= 500);
 assert.equal(context.buildMntMerchStatusReply_(`C${'2'.repeat(32)}`), '此指令只提供商化管理群組使用。');
 
 quotaUsage = 170;

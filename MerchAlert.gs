@@ -218,37 +218,31 @@ function buildMntMerchStatusReply_(groupId) {
   var progress = snapshot.progress || {};
   var service = snapshot.service || {};
   var issues = snapshot.issues || {};
-  var links = snapshot.links || {};
-  var managerBase = String(links.manager || '').replace(/[?&]page=[^&]*/g, '');
   var updatedAt = new Date(snapshot.updatedAt || snapshot.receivedAt || 0);
   var stale = !Number.isFinite(updatedAt.getTime()) || Date.now() - updatedAt.getTime() > 15 * 60 * 1000;
   var serviceLabel = service.status === 'ok' ? '正常' : service.status === 'degraded' ? '部分功能異常' : service.status === 'down' ? '服務中斷' : '待確認';
+  var issueTotal = Number(issues.photo || 0) + Number(issues.gps || 0) + Number(issues.task || 0) + Number(issues.other || 0);
   var lines = [
-    '【MNT 商化即時狀態】',
-    stale ? '⚠ 狀態超過 15 分鐘未更新' : '服務：' + serviceLabel,
+    '【' + formatMntStatusMonthLabel_(snapshot.month) + ' MNT 商化摘要】',
+    '服務：' + serviceLabel,
     '進度：' + Number(progress.reported || 0) + ' / ' + Number(progress.total || 0) + ' 店（' + Number(progress.percent || 0) + '%）',
     '待回報：' + Number(progress.unreported || 0) + ' 店',
-    '待處理：照片 ' + Number(issues.photo || 0) + '｜GPS ' + Number(issues.gps || 0) + '｜任務 ' + Number(issues.task || 0) + '｜其他 ' + Number(issues.other || 0),
+    '',
+    '待處理：' + issueTotal + ' 項',
+    '照片 ' + Number(issues.photo || 0) + '｜定位 ' + Number(issues.gps || 0) + '｜任務 ' + Number(issues.task || 0) + '｜其他 ' + Number(issues.other || 0),
+    stale ? '資料：⚠ 超過 15 分鐘未更新' : '資料：已更新',
     '更新：' + formatMntStatusTime_(updatedAt)
   ];
-  if (managerBase) {
-    lines.push('即時回應：' + managerBase + '?page=situation');
-    lines.push('商化查詢：' + managerBase + '?page=dashboard');
-    lines.push('照片查詢：' + managerBase + '?page=photos');
-    lines.push('型號管理：' + managerBase + '?page=models');
-  } else {
-    if (links.situation) lines.push('即時回應：' + links.situation);
-    if (links.dashboard) lines.push('商化查詢：' + links.dashboard);
-    if (links.photos) lines.push('照片查詢：' + links.photos);
-    if (links.models) lines.push('型號管理：' + links.models);
-  }
-  if (links.fieldReport) lines.push('前線回報：' + links.fieldReport);
-  if (links.guide) lines.push('回報說明：' + links.guide);
-  return lines.join('\n').slice(0, 4500);
+  return lines.join('\n').slice(0, 500);
 }
 
 function formatMntStatusMonth_(date) {
   return Utilities.formatDate(date, 'Asia/Taipei', 'yyyyMM');
+}
+
+function formatMntStatusMonthLabel_(month) {
+  var text = String(month || '');
+  return /^\d{6}$/.test(text) ? text.slice(0, 4) + '/' + text.slice(4) : '本月';
 }
 
 function formatMntStatusTime_(date) {
