@@ -1,0 +1,30 @@
+# LINE Bot 修正防復發台帳
+
+這是商化 LINE Bot 的不可回退規則。自 2026-07-21 起，`Main.js`、`MerchAlert.gs`、`Reminder.js`、`Sales.js` 或 `appsscript.json` 有任何修正時，必須同一批更新本檔；`node verify_merch_alert_gateway.mjs` 會檢查工作樹與最後一次台帳更新後的 Git 變更。
+
+## LB-RG-001 — 一般聊天不得觸發商化摘要
+
+- 日期：2026-07-21
+- 症狀：若群組任何發話都回覆，四人同時聊天會造成洗版與無謂處理。
+- 根因：把一般訊息與明確查詢指令混在同一路由。
+- 永久規則：只有指定商化群組輸入精確 `/商化` 才回覆摘要，不需 @；一般聊天一律忽略。
+- 自動守門：`verify_merch_alert_gateway.mjs` 的狀態快照、指定群組與 `/商化` 回覆測試。
+- 首次納入：LINE Bot `@50`，並持續保留於 `@51`。
+
+## LB-RG-002 — 主動推播只保留事故生命週期
+
+- 日期：2026-07-21
+- 症狀：四人群的進度、照片問題與公告 Push 會快速消耗月額。
+- 根因：一般狀態與真正服務事故共用 Push 入口。
+- 永久規則：只允許 `system_down`、`system_recovered` 與人工 `integration_test`；其他類別只同步快照或回覆查詢。每月預設硬上限 40 收件人次，群組人數不明時保守按 10 人估算。
+- 自動守門：`verify_merch_alert_gateway.mjs` 的類別封鎖、四人群成本與 proactive cap 測試。
+- 首次納入：LINE Bot `@51`。
+
+## LB-RG-003 — Push 成功後不得因附帶紀錄失敗而重送
+
+- 日期：2026-07-21
+- 症狀：LINE 已收到通知，但 ALL 工作表寫入失敗時，重跑可能重複通知。
+- 根因：沒有把「LINE 已送達」與「附帶紀錄成功」拆成兩個結果。
+- 永久規則：事件 ID 與 retry key 必須穩定；Push 成功即視為已送達，ALL 寫入失敗只記錯誤，不得再次 Push 同一事件。
+- 自動守門：`verify_merch_alert_gateway.mjs` 的 duplicate、retry-key 與 ALL 寫入失敗測試。
+- 首次納入：LINE Bot `@51`。

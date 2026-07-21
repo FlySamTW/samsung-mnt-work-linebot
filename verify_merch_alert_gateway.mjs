@@ -1,8 +1,12 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
 
+const repoRoot = path.dirname(fileURLToPath(import.meta.url));
 const source = fs.readFileSync(new URL('./MerchAlert.gs', import.meta.url), 'utf8');
 const scriptProperties = new Map([
   ['MNT_ALERT_GROUP_ID', `C${'1'.repeat(32)}`],
@@ -247,5 +251,62 @@ const capped = handle(signedPayload({ eventId: 'proactive-cap', category: 'syste
 assert.equal(capped.ok, false);
 assert.match(capped.error, /主動通知本月安全上限/);
 assert.equal(pushes.length, 2);
+
+function gitChangedPaths(args) {
+  try {
+    return execFileSync('git', args, { cwd: repoRoot, encoding: 'utf8' })
+      .split(/\r?\n/)
+      .map(value => value.trim().replaceAll('\\', '/'))
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+function verifyRegressionLedger() {
+  const ledgerRelativePath = 'REGRESSION_GUARDS.md';
+  const ledgerPath = path.join(repoRoot, ledgerRelativePath);
+  assert.ok(fs.existsSync(ledgerPath), 'missing LINE Bot regression guard ledger');
+  const ledger = fs.readFileSync(ledgerPath, 'utf8');
+  const entries = Array.from(ledger.matchAll(/^## (LB-RG-\d{3}) — .+$/gm));
+  assert.ok(entries.length >= 3, 'LINE Bot regression ledger must retain all active message-safety corrections');
+  assert.equal(new Set(entries.map(match => match[1])).size, entries.length, 'LINE Bot regression guard IDs must be unique');
+  const requiredFields = ['日期', '症狀', '根因', '永久規則', '自動守門', '首次納入'];
+  entries.forEach((entry, index) => {
+    const bodyStart = entry.index + entry[0].length;
+    const bodyEnd = index + 1 < entries.length ? entries[index + 1].index : ledger.length;
+    const body = ledger.slice(bodyStart, bodyEnd);
+    requiredFields.forEach(field => {
+      assert.match(body, new RegExp(`^- ${field}：\\S.+$`, 'm'), `${entry[1]} missing ${field}`);
+    });
+  });
+
+  const isProgram = filePath => new Set([
+    'Main.js', 'MerchAlert.gs', 'Reminder.js', 'Sales.js', 'appsscript.json'
+  ]).has(filePath);
+  const workingChanges = Array.from(new Set([
+    ...gitChangedPaths(['diff', '--name-only', 'HEAD']),
+    ...gitChangedPaths(['ls-files', '--others', '--exclude-standard'])
+  ]));
+  const workingProgramChanges = workingChanges.filter(isProgram);
+  if (workingProgramChanges.length > 0) {
+    assert.ok(
+      workingChanges.includes(ledgerRelativePath),
+      `LINE Bot program changes require the regression ledger in the same working change:\n${workingProgramChanges.join('\n')}`
+    );
+  }
+
+  const ledgerCommits = gitChangedPaths(['log', '-1', '--format=%H', '--', ledgerRelativePath]);
+  if (ledgerCommits[0]) {
+    const programChangesAfterLedger = gitChangedPaths(['diff', '--name-only', `${ledgerCommits[0]}..HEAD`]).filter(isProgram);
+    assert.deepEqual(
+      programChangesAfterLedger,
+      [],
+      `LINE Bot program changes were committed after the last regression ledger update:\n${programChangesAfterLedger.join('\n')}`
+    );
+  }
+}
+
+verifyRegressionLedger();
 
 console.log('LINEBOT merch alert gateway verification passed');
