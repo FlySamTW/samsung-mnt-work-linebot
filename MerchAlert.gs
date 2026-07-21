@@ -4,11 +4,14 @@ var MNT_ALERT_GROUP_PROPERTY = 'MNT_ALERT_GROUP_ID';
 var MNT_ALERT_SECRET_PROPERTY = 'MNT_ALERT_SECRET';
 var MNT_ALERT_MONTHLY_LIMIT_PROPERTY = 'MNT_ALERT_MONTHLY_LIMIT';
 var MNT_ALERT_RESERVED_QUOTA_PROPERTY = 'MNT_ALERT_RESERVED_QUOTA';
+var MNT_ALERT_PROACTIVE_CAP_PROPERTY = 'MNT_ALERT_PROACTIVE_MONTHLY_CAP';
+var MNT_ALERT_PROACTIVE_USAGE_PROPERTY = 'MNT_ALERT_PROACTIVE_USAGE';
 var MNT_ALERT_RECENT_EVENTS_PROPERTY = 'MNT_ALERT_RECENT_EVENTS';
 var MNT_MERCH_STATUS_SNAPSHOT_PROPERTY = 'MNT_MERCH_STATUS_SNAPSHOT';
 var MNT_ALERT_MANAGEMENT_GROUP_ID = 'C19c9d03e3605481d85c45982aa814e60';
 var MNT_ALERT_DEFAULT_MONTHLY_LIMIT = 200;
 var MNT_ALERT_DEFAULT_RESERVED_QUOTA = 40;
+var MNT_ALERT_DEFAULT_PROACTIVE_CAP = 40;
 var MNT_ALERT_MESSAGE_MAX_LENGTH = 4500;
 var MNT_ALERT_ALLOWED_CATEGORIES = [
   'system_down',
@@ -22,7 +25,10 @@ var MNT_ALERT_ALLOWED_CATEGORIES = [
 ];
 var MNT_ALERT_EMERGENCY_CATEGORIES = [
   'system_down',
-  'system_action_required',
+  'system_recovered'
+];
+var MNT_ALERT_PUSH_CATEGORIES = [
+  'system_down',
   'system_recovered',
   'integration_test'
 ];
@@ -103,8 +109,8 @@ function processMntAlertRequest_(request) {
     return storeMntMerchStatusSnapshot_(request, props);
   }
   updateMntMerchServiceFromAlert_(request, props);
-  if (request.category === 'field_critical' && !isMntAlertTrulyCritical_(request.message)) {
-    return { suppressed: true, eventId: request.eventId, expectedCost: 0 };
+  if (MNT_ALERT_PUSH_CATEGORIES.indexOf(request.category) < 0) {
+    return { suppressed: true, replyOnly: true, eventId: request.eventId, expectedCost: 0 };
   }
   var recentEvents = readRecentMntAlertEvents_(props);
   if (recentEvents.indexOf(request.eventId) >= 0) {
@@ -119,6 +125,11 @@ function processMntAlertRequest_(request) {
   if (remainingAfterSend < 0 || (!emergency && remainingAfterSend < reserve)) {
     throw new Error(emergency ? 'LINE 本月可用額度不足' : 'LINE 額度已保留給系統故障通知');
   }
+  var proactive = getMntAlertProactiveUsage_(props);
+  var proactiveCap = positiveMntAlertNumber_(props.getProperty(MNT_ALERT_PROACTIVE_CAP_PROPERTY), MNT_ALERT_DEFAULT_PROACTIVE_CAP);
+  if (proactive.used + expectedCost > proactiveCap) {
+    throw new Error('商化主動通知本月安全上限已滿；請在群組輸入 /商化 查詢');
+  }
 
   if (request.dryRun) {
     return { dryRun: true, eventId: request.eventId, quota: quota, expectedCost: expectedCost };
@@ -127,6 +138,7 @@ function processMntAlertRequest_(request) {
   var groupId = props.getProperty(MNT_ALERT_GROUP_PROPERTY) || '';
   if (!/^C[a-f0-9]{32}$/i.test(groupId)) throw new Error('商化管理群組尚未設定');
   var response = pushMntAlertMessage_(groupId, request.message, request.eventId, request.category);
+  recordMntAlertProactiveUsage_(props, proactive, expectedCost);
   var allLogSaved = logMntAlertSuccessToAll_(request, groupId, response, expectedCost);
   recentEvents.unshift(request.eventId);
   props.setProperty(MNT_ALERT_RECENT_EVENTS_PROPERTY, JSON.stringify(recentEvents.slice(0, 240)));
@@ -138,6 +150,23 @@ function processMntAlertRequest_(request) {
     quota: quota,
     expectedCost: expectedCost
   };
+}
+
+function getMntAlertProactiveUsage_(props) {
+  var month = Utilities.formatDate(new Date(), 'Asia/Taipei', 'yyyyMM');
+  var parsed = parseMntAlertJson_((props || PropertiesService.getScriptProperties()).getProperty(MNT_ALERT_PROACTIVE_USAGE_PROPERTY));
+  if (!parsed || parsed.month !== month) return { month: month, used: 0 };
+  return { month: month, used: Math.max(0, Number(parsed.used || 0)) };
+}
+
+function recordMntAlertProactiveUsage_(props, current, cost) {
+  var next = {
+    month: current.month,
+    used: Math.max(0, Number(current.used || 0)) + Math.max(0, Number(cost || 0)),
+    updatedAt: new Date().toISOString()
+  };
+  props.setProperty(MNT_ALERT_PROACTIVE_USAGE_PROPERTY, JSON.stringify(next));
+  return next;
 }
 
 function isMntAlertTrulyCritical_(message) {

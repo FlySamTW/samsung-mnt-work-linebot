@@ -159,39 +159,28 @@ const trulyCritical = handle(signedPayload({
   message: '【需主管留意｜現場回報】\nM001 測試門市｜測試人員\n問題：定位距離異常'
 }));
 assert.equal(trulyCritical.ok, true);
-assert.equal(trulyCritical.sent, true);
-assert.equal(trulyCritical.allLogSaved, true);
-assert.equal(pushes.length, 1);
-assert.equal(allMessageLogs.length, 1);
-const sentAllLog = allMessageLogs[0];
-assert.equal(sentAllLog[1], 'MNT_PUSH:truly-critical');
-assert.equal(sentAllLog[4], scriptProperties.get('MNT_ALERT_GROUP_ID'));
-assert.equal(sentAllLog[5], '主動通知/field_critical');
-assert.match(sentAllLog[6], /定位距離異常/);
-assert.match(sentAllLog[7], /PUSH成功/);
-assert.match(sentAllLog[7], /類別：field_critical/);
-assert.match(sentAllLog[7], /預估額度：4/);
-assert.match(sentAllLog[7], /LINE請求編號：test-request-id/);
-assert.equal(pushes[0].body.to, scriptProperties.get('MNT_ALERT_GROUP_ID'));
-assert.match(pushes[0].options.headers['X-Line-Retry-Key'], /^[0-9a-f-]{36}$/);
+assert.equal(trulyCritical.suppressed, true);
+assert.equal(trulyCritical.replyOnly, true);
+assert.equal(pushes.length, 0);
+assert.equal(allMessageLogs.length, 0);
 
 const taskMappingCritical = handle(signedPayload({
   eventId: 'task-mapping-critical',
   message: '【需主管留意｜現場回報】\nM002 測試門市｜測試人員\n問題：回報無法對應本月任務'
 }));
 assert.equal(taskMappingCritical.ok, true);
-assert.equal(taskMappingCritical.sent, true);
-assert.equal(pushes.length, 2);
-assert.equal(allMessageLogs.length, 2);
+assert.equal(taskMappingCritical.suppressed, true);
+assert.equal(pushes.length, 0);
+assert.equal(allMessageLogs.length, 0);
 
 const duplicate = handle(signedPayload({
   eventId: 'truly-critical',
   message: '【需主管留意｜現場回報】\nM001 測試門市｜測試人員\n問題：定位距離異常'
 }));
 assert.equal(duplicate.ok, true);
-assert.equal(duplicate.duplicate, true);
-assert.equal(pushes.length, 2);
-assert.equal(allMessageLogs.length, 2);
+assert.equal(duplicate.suppressed, true);
+assert.equal(pushes.length, 0);
+assert.equal(allMessageLogs.length, 0);
 
 const statusSnapshot = {
   v: 1,
@@ -214,8 +203,8 @@ const synced = handle(signedPayload({
 assert.equal(synced.ok, true);
 assert.equal(synced.synced, true);
 assert.equal(synced.expectedCost, 0);
-assert.equal(pushes.length, 2);
-assert.equal(allMessageLogs.length, 2);
+assert.equal(pushes.length, 0);
+assert.equal(allMessageLogs.length, 0);
 const statusReply = context.buildMntMerchStatusReply_(scriptProperties.get('MNT_ALERT_GROUP_ID'));
 assert.match(statusReply, /【2026\/07 MNT 商化摘要】/);
 assert.match(statusReply, /進度：56 \/ 280 店（20%）/);
@@ -227,14 +216,16 @@ assert.equal(context.buildMntMerchStatusReply_(`C${'2'.repeat(32)}`), '此指令
 
 quotaUsage = 170;
 const reserved = handle(signedPayload({ eventId: 'reserved', category: 'progress' }));
-assert.equal(reserved.ok, false);
-assert.match(reserved.error, /保留給系統故障通知/);
-assert.equal(pushes.length, 2);
+assert.equal(reserved.ok, true);
+assert.equal(reserved.suppressed, true);
+assert.equal(pushes.length, 0);
 
 const emergency = handle(signedPayload({ eventId: 'emergency', category: 'system_down' }));
 assert.equal(emergency.ok, true);
-assert.equal(pushes.length, 3);
-assert.equal(allMessageLogs.length, 3);
+assert.equal(pushes.length, 1);
+assert.equal(allMessageLogs.length, 1);
+assert.equal(pushes[0].body.to, scriptProperties.get('MNT_ALERT_GROUP_ID'));
+assert.match(pushes[0].options.headers['X-Line-Retry-Key'], /^[0-9a-f-]{36}$/);
 const downSnapshot = JSON.parse(scriptProperties.get('MNT_MERCH_STATUS_SNAPSHOT'));
 assert.equal(downSnapshot.service.status, 'down');
 
@@ -244,11 +235,17 @@ const allLogFailure = handle(signedPayload({ eventId: 'all-log-failure', categor
 assert.equal(allLogFailure.ok, true);
 assert.equal(allLogFailure.sent, true);
 assert.equal(allLogFailure.allLogSaved, false);
-assert.equal(pushes.length, 4);
-assert.equal(allMessageLogs.length, 4);
+assert.equal(pushes.length, 2);
+assert.equal(allMessageLogs.length, 2);
 const allLogFailureDuplicate = handle(signedPayload({ eventId: 'all-log-failure', category: 'system_down' }));
 assert.equal(allLogFailureDuplicate.duplicate, true);
-assert.equal(pushes.length, 4);
-assert.equal(allMessageLogs.length, 4);
+assert.equal(pushes.length, 2);
+assert.equal(allMessageLogs.length, 2);
+
+scriptProperties.set('MNT_ALERT_PROACTIVE_MONTHLY_CAP', '8');
+const capped = handle(signedPayload({ eventId: 'proactive-cap', category: 'system_recovered' }));
+assert.equal(capped.ok, false);
+assert.match(capped.error, /主動通知本月安全上限/);
+assert.equal(pushes.length, 2);
 
 console.log('LINEBOT merch alert gateway verification passed');
