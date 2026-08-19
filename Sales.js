@@ -39,6 +39,7 @@ function processSalesGroupMessage(timestamp, messageId, userId, message) {
       startCount: null,
       endCount: null,
       samsungCount: null,
+      shiftSalesCount: null,
       salesRatio: null
     };
 
@@ -136,23 +137,20 @@ function analyzeCheckOut(parts, result, displayName) {
     return result;
   }
 
-  // 加入三星銷售數量檢查
-  if (samsungCount > endCount) {
-    result.message = '三星銷售數量不能大於總銷售數量';
+  // 取得同一人員、同一店點今日最早的到點紀錄，作為當班初始台數。
+  const startReport = getStartReport(displayName, parts[1]);
+  if (startReport.message) {
+    result.message = startReport.message;
     result.needResponse = true;
     return result;
   }
 
-  // 檢查是否有到點記錄
-  const startReport = checkStartReport(displayName, parts[1]);
-  if (startReport) {
-    result.message = startReport;
+  const shiftSales = calculateShiftSales(startReport.startCount, endCount, samsungCount);
+  if (!shiftSales.isValid) {
+    result.message = shiftSales.message;
     result.needResponse = true;
     return result;
   }
-
-  // 計算銷售比例
-  const salesRatio = endCount > 0 ? (samsungCount / endCount) * 100 : 0;
 
   result.isValid = true;
   result.needResponse = true;
@@ -160,7 +158,8 @@ function analyzeCheckOut(parts, result, displayName) {
   result.store = parts[1];
   result.endCount = endCount;
   result.samsungCount = samsungCount;
-  result.salesRatio = salesRatio;
+  result.shiftSalesCount = shiftSales.shiftSalesCount;
+  result.salesRatio = shiftSales.salesRatio;
 
   return result;
 }
@@ -198,8 +197,8 @@ function checkDuplicateReport(displayName, result) {
   }
 }
 
-// 檢查是否有到點記錄
-function checkStartReport(displayName, store) {
+// 取得今日最早的到點記錄與初始台數
+function getStartReport(displayName, store) {
   try {
     const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SALES_SHEET_NAME);
     const today = new Date();
@@ -207,10 +206,15 @@ function checkStartReport(displayName, store) {
     today.setMilliseconds(0);
     
     const lastRow = sheet.getLastRow();
-    if (lastRow <= 1) return `${displayName} 今天尚未在 ${store} 報到，請先報到`;
+    if (lastRow <= 1) {
+      return {
+        startCount: null,
+        message: `${displayName} 今天尚未在 ${store} 報到，請先報到`
+      };
+    }
     
-    const data = sheet.getRange(2, 1, lastRow - 1, 5).getValues();
-    let hasStartRecord = false;
+    const data = sheet.getRange(2, 1, lastRow - 1, 6).getValues();
+    let earliestStart = null;
     
     for (let row of data) {
       const recordDate = new Date(row[0]);
@@ -221,20 +225,76 @@ function checkStartReport(displayName, store) {
           row[2] === displayName && 
           row[3] === store && 
           row[4] === '到點') {
-        hasStartRecord = true;
-        break;
+        const timestamp = new Date(row[0]).getTime();
+        if (!earliestStart || timestamp < earliestStart.timestamp) {
+          const rawStartCount = row[5];
+          earliestStart = {
+            timestamp: timestamp,
+            startCount: typeof rawStartCount === 'number' ? rawStartCount : parseNumber(rawStartCount)
+          };
+        }
       }
     }
     
-    if (!hasStartRecord) {
-      return `${displayName} 今天尚未在 ${store} 報到，請先報到`;
+    if (!earliestStart) {
+      return {
+        startCount: null,
+        message: `${displayName} 今天尚未在 ${store} 報到，請先報到`
+      };
     }
-    
-    return null;
+
+    if (!Number.isInteger(earliestStart.startCount) || earliestStart.startCount < 0) {
+      return {
+        startCount: null,
+        message: `${displayName} 今天在 ${store} 的初始台數無法辨識，請聯絡管理者確認`
+      };
+    }
+
+    return { startCount: earliestStart.startCount, message: null };
   } catch (error) {
-    writeLog("Error in checkStartReport: " + error.toString());
-    return null;
+    writeLog("Error in getStartReport: " + error.toString());
+    return {
+      startCount: null,
+      message: '目前無法讀取到點紀錄，請稍後再試'
+    };
   }
+}
+
+// 保留既有函式介面，其他指令碼若仍呼叫時只取得錯誤訊息。
+function checkStartReport(displayName, store) {
+  return getStartReport(displayName, store).message;
+}
+
+// 依初始與下班累計台數計算當班全品牌銷量及三星占比。
+function calculateShiftSales(startCount, endCount, samsungCount) {
+  if (![startCount, endCount, samsungCount].every(value => Number.isInteger(value) && value >= 0)) {
+    return {
+      isValid: false,
+      message: '台數格式錯誤，請使用零或正整數'
+    };
+  }
+
+  if (endCount < startCount) {
+    return {
+      isValid: false,
+      message: `下班總台數不能小於到點初始台數（初始 ${startCount} 台）`
+    };
+  }
+
+  const shiftSalesCount = endCount - startCount;
+  if (samsungCount > shiftSalesCount) {
+    return {
+      isValid: false,
+      message: `三星台數不能大於當班全品牌銷量（${shiftSalesCount} 台）`
+    };
+  }
+
+  return {
+    isValid: true,
+    message: null,
+    shiftSalesCount: shiftSalesCount,
+    salesRatio: shiftSalesCount === 0 ? 0 : (samsungCount / shiftSalesCount) * 100
+  };
 }
 
 // 生成回應訊息
@@ -251,7 +311,7 @@ function generateResponse(result, displayName) {
     const weekdays = ['日', '一', '二', '三', '四', '五', '六'];
     const timeStr = `${now.getMonth() + 1}/${now.getDate()}(${weekdays[now.getDay()]}) ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
 
-    if (result.endCount === 0) {
+    if (result.shiftSalesCount === 0) {
       return `${timeStr}\n${displayName} 下班打卡成功\n當班全店無銷售任何螢幕`;
     }
     if (result.samsungCount === 0) {
@@ -300,9 +360,10 @@ function recordSalesData(timestamp, messageId, userId, displayName, store, type,
 // 解析數字
 function parseNumber(str) {
   try {
-    str = str.replace('台', '').trim();
-    const num = parseInt(str);
-    return isNaN(num) ? null : num;
+    const normalized = String(str).trim().replace(/台$/, '').trim();
+    if (!/^(0|[1-9]\d*)$/.test(normalized)) return null;
+    const num = Number(normalized);
+    return Number.isSafeInteger(num) ? num : null;
   } catch (error) {
     return null;
   }
