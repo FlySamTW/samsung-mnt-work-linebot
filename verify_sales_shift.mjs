@@ -26,6 +26,10 @@ function makeSheet(name) {
       assert.equal(row, 2);
       this.data.unshift(Array(dutyHeaders.length).fill(''));
     },
+    deleteRow(row) {
+      assert.ok(row >= 2 && row <= this.data.length + 1);
+      this.data.splice(row - 2, 1);
+    },
     setFrozenRows(count) {
       this.frozenRows = count;
     },
@@ -109,6 +113,9 @@ const context = {
   LockService: {
     getScriptLock: () => ({ waitLock: () => {}, releaseLock: () => {} })
   },
+  Utilities: {
+    getUuid: () => '00000000-0000-4000-8000-000000000001'
+  },
   writeLog: message => logs.push(message)
 };
 
@@ -190,6 +197,15 @@ assert.deepEqual(
 assert.equal(context.recordSalesData(now, 'dual-message', 'user-id', '測試人員', '測試店', '下班', null, 20, 4), true);
 assert.equal(legacySheet.data.length, 1, '舊表重送不得重複');
 assert.equal(newSheet.data.length, 1, '新表重送不得重複');
+
+// 正式煙霧測試必須先讀回兩表，最後再按唯一 messageId 清除且確認無殘留。
+const legacyCountBeforeSmoke = legacySheet.data.length;
+const newCountBeforeSmoke = newSheet.data.length;
+const smokeResult = context.smokeTestSalesDutyDualWrite();
+assert.equal(smokeResult.cleaned, true);
+assert.match(smokeResult.messageId, /^codex-duty-smoke-/);
+assert.equal(legacySheet.data.length, legacyCountBeforeSmoke);
+assert.equal(newSheet.data.length, newCountBeforeSmoke);
 
 // 新表暫時失敗不得中斷正在營運的舊 LINE 流程。
 legacySheet.data = [];

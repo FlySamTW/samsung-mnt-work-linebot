@@ -45,3 +45,4 @@ LINE PUSH 成功後，主動通知會寫入既有的 `ALL` 工作表；若 PUSH 
 - 未設定 `SALES_DUTY_WRITE_MODE` 時預設為 `DUAL`：舊表先寫入，新表以相同 LINE `訊息ID` 冪等寫入；新表暫時失敗只記錄錯誤，不中斷既有現場流程。
 - 管理者明確要求正式切換後，在 Apps Script 編輯器執行 `enableSalesDutyNewOnly()`（CLI 亦可執行 `setSalesDutyWriteMode('NEW_ONLY')`）；程式會先補齊 2026/8/1 起資料並確認缺漏為 0，才停止寫入舊表。並行期要明確重設時執行 `enableSalesDutyDualWrite()`。
 - 需要人工補寫或稽核時執行 `syncSalesDutyHistoryToNew()`，回傳 `sourceRows`、`insertedRows`、`missingAfter`。
+- 正式部署後可執行 `smokeTestSalesDutyDualWrite()`；它會以 `codex-duty-smoke-*` 唯一訊息 ID 寫入新舊兩表、讀回，再依 ID 精準刪除並確認兩表皆無殘留，不會向 LINE 群組發訊息。

@@ -159,6 +159,65 @@ function enableSalesDutyNewOnly() {
   return setSalesDutyWriteMode(SALES_DUTY_WRITE_MODE_NEW_ONLY);
 }
 
+function countSalesDutyMessage_(sheet, messageId) {
+  const lastRow = sheet.getLastRow();
+  if (lastRow <= 1) return 0;
+  const target = String(messageId || '');
+  return sheet.getRange(2, 2, lastRow - 1, 1).getValues()
+    .filter(row => String(row[0] || '') === target).length;
+}
+
+function deleteSalesDutyMessage_(sheet, messageId) {
+  const lastRow = sheet.getLastRow();
+  if (lastRow <= 1) return 0;
+  const target = String(messageId || '');
+  const ids = sheet.getRange(2, 2, lastRow - 1, 1).getValues();
+  let deleted = 0;
+  for (let index = ids.length - 1; index >= 0; index -= 1) {
+    if (String(ids[index][0] || '') !== target) continue;
+    sheet.deleteRow(index + 2);
+    deleted += 1;
+  }
+  return deleted;
+}
+
+// 管理者煙霧測試：以唯一訊息 ID 寫入兩表、讀回確認，再精準刪除並再次讀回。
+// 不經 LINE、不發群組訊息，也不使用真實人員姓名。
+function smokeTestSalesDutyDualWrite() {
+  if (getSalesDutyWriteMode_() !== SALES_DUTY_WRITE_MODE_DUAL) {
+    throw new Error('目前不是 DUAL，拒絕執行雙寫煙霧測試');
+  }
+
+  const messageId = 'codex-duty-smoke-' + Utilities.getUuid();
+  const legacy = getLegacySalesDutySheet_();
+  const current = getNewSalesDutySheet_();
+  try {
+    const saved = recordSalesData(
+      Date.now(), messageId, 'codex-test', 'Codex dual-write smoke',
+      '內湖燦坤', '到點', 0, null, null
+    );
+    if (!saved) throw new Error('雙寫煙霧測試寫入失敗');
+    SpreadsheetApp.flush();
+
+    const legacyCount = countSalesDutyMessage_(legacy, messageId);
+    const currentCount = countSalesDutyMessage_(current, messageId);
+    if (legacyCount !== 1 || currentCount !== 1) {
+      throw new Error('雙寫讀回不一致：legacy=' + legacyCount + ', new=' + currentCount);
+    }
+  } finally {
+    deleteSalesDutyMessage_(legacy, messageId);
+    deleteSalesDutyMessage_(current, messageId);
+    SpreadsheetApp.flush();
+    const legacyRemaining = countSalesDutyMessage_(legacy, messageId);
+    const currentRemaining = countSalesDutyMessage_(current, messageId);
+    if (legacyRemaining !== 0 || currentRemaining !== 0) {
+      throw new Error('煙霧測試清理失敗：legacy=' + legacyRemaining + ', new=' + currentRemaining);
+    }
+  }
+
+  return { messageId, legacyWritten: 1, newWritten: 1, cleaned: true };
+}
+
 // 取得自訂顯示名稱
 function getCustomDisplayName(userId) {
   try {
