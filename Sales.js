@@ -149,6 +149,16 @@ function setSalesDutyWriteMode(mode) {
   }
 }
 
+// Apps Script 編輯器的管理入口（編輯器無法替函式帶入參數）。
+function enableSalesDutyDualWrite() {
+  return setSalesDutyWriteMode(SALES_DUTY_WRITE_MODE_DUAL);
+}
+
+// 只有管理者明確下令切換後才可執行；內部仍會先跑完整同步守門。
+function enableSalesDutyNewOnly() {
+  return setSalesDutyWriteMode(SALES_DUTY_WRITE_MODE_NEW_ONLY);
+}
+
 // 取得自訂顯示名稱
 function getCustomDisplayName(userId) {
   try {

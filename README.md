@@ -43,5 +43,5 @@ LINE PUSH 成功後，主動通知會寫入既有的 `ALL` 工作表；若 PUSH 
 - 新制工作簿：<https://docs.google.com/spreadsheets/d/1dNJxwn8HaY6dnGh7pogsoscg6Oo3nVfW8wxpLNGv2Q4/edit>
 - 新制分頁：`LINE勤務`，固定沿用既有 `銷售群組` 的 A:I 九欄契約。
 - 未設定 `SALES_DUTY_WRITE_MODE` 時預設為 `DUAL`：舊表先寫入，新表以相同 LINE `訊息ID` 冪等寫入；新表暫時失敗只記錄錯誤，不中斷既有現場流程。
-- 管理者明確要求正式切換後，執行 `setSalesDutyWriteMode('NEW_ONLY')`；程式會先補齊 2026/8/1 起資料並確認缺漏為 0，才停止寫入舊表。
+- 管理者明確要求正式切換後，在 Apps Script 編輯器執行 `enableSalesDutyNewOnly()`（CLI 亦可執行 `setSalesDutyWriteMode('NEW_ONLY')`）；程式會先補齊 2026/8/1 起資料並確認缺漏為 0，才停止寫入舊表。並行期要明確重設時執行 `enableSalesDutyDualWrite()`。
 - 需要人工補寫或稽核時執行 `syncSalesDutyHistoryToNew()`，回傳 `sourceRows`、`insertedRows`、`missingAfter`。

@@ -44,5 +44,5 @@
 - 症狀：新銷售網頁與新 Sheet 已建立，但 LINE 到點／下班仍只寫既有 `銷售群組`，造成新制 Excel 缺少勤務與總台數來源。
 - 根因：原規劃只讓新版 Excel 另讀既有 LINE 工作簿，未依實際營運要求把 LINE 勤務同步保存到新制工作簿。
 - 永久規則：`SALES_DUTY_WRITE_MODE=DUAL` 時，同一 LINE `訊息ID` 必須冪等寫入既有 `銷售群組` 與新制 `LINE勤務`；新表暫時失敗不得阻斷舊表及現場回覆，切換前必須執行完整補寫並確認缺漏為 0。只有管理者明確切換成 `NEW_ONLY` 後，才停止寫舊表；到點重複檢查及下班到點檢查亦須同步改讀新表。
-- 自動守門：`node verify_sales_shift.mjs` 驗證雙寫、訊息 ID 去重、新表故障不影響舊表、`NEW_ONLY` 只寫／只讀新表及切換前同步守門。
+- 自動守門：`node verify_sales_shift.mjs` 驗證雙寫、訊息 ID 去重、新表故障不影響舊表、`NEW_ONLY` 只寫／只讀新表、切換前同步守門，以及 Apps Script 編輯器用的無參數雙寫管理入口。
 - 首次納入：LINE Bot 下一正式版本，沿用原 webhook deployment ID，不更換網址。

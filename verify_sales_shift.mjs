@@ -122,6 +122,8 @@ assert.equal(context.parseNumber('-1'), null);
 assert.equal(context.parseNumber('1.5'), null);
 assert.equal(context.parseNumber('12abc'), null);
 assert.equal(context.getSalesDutyWriteMode_(), 'DUAL', '未設定時必須預設雙寫');
+assert.equal(context.enableSalesDutyDualWrite(), 'DUAL', '編輯器管理入口必須能明確設為雙寫');
+assert.equal(properties.get('SALES_DUTY_WRITE_MODE'), 'DUAL');
 
 const now = Date.now();
 legacySheet.data = [
