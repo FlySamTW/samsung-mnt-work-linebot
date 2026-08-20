@@ -39,29 +39,6 @@ const context = {
 vm.createContext(context);
 vm.runInContext(source, context);
 
-const ordinary = context.calculateShiftSales(10, 20, 4);
-assert.equal(ordinary.isValid, true);
-assert.equal(ordinary.shiftSalesCount, 10);
-assert.equal(ordinary.salesRatio, 40);
-
-const allSamsung = context.calculateShiftSales(10, 14, 4);
-assert.equal(allSamsung.isValid, true);
-assert.equal(allSamsung.shiftSalesCount, 4);
-assert.equal(allSamsung.salesRatio, 100);
-
-const noSales = context.calculateShiftSales(10, 10, 0);
-assert.equal(noSales.isValid, true);
-assert.equal(noSales.shiftSalesCount, 0);
-assert.equal(noSales.salesRatio, 0);
-
-const backwards = context.calculateShiftSales(10, 9, 0);
-assert.equal(backwards.isValid, false);
-assert.match(backwards.message, /不能小於到點初始台數/);
-
-const samsungOverDelta = context.calculateShiftSales(10, 20, 11);
-assert.equal(samsungOverDelta.isValid, false);
-assert.match(samsungOverDelta.message, /不能大於當班全品牌銷量/);
-
 assert.equal(context.parseNumber('12'), 12);
 assert.equal(context.parseNumber('12台'), 12);
 assert.equal(context.parseNumber('0'), 0);
@@ -71,47 +48,53 @@ assert.equal(context.parseNumber('12abc'), null);
 
 const now = Date.now();
 rows = [
-  [new Date(now - 60_000), 'newer', '測試人員', '測試店', '到點', 12],
-  [new Date(now - 3_600_000), 'earliest', '測試人員', '測試店', '到點', 10]
+  [new Date(now - 60_000), 'arrival', '測試人員', '測試店', '到點', 14]
 ];
-const startReport = context.getStartReport('測試人員', '測試店');
-assert.equal(startReport.message, null);
-assert.equal(startReport.startCount, 10);
+assert.equal(context.checkStartReport('測試人員', '測試店'), null);
 
+// 2026/08/20 正式現場案例：到點 14、下班 12、Samsung 2 必須允許。
+// 既有 LINE 輸入只以下班總台數作為占比分母，不與到點初始台數相減。
 const checkout = context.analyzeCheckOut(
-  ['下班', '測試店', '20', '4'],
+  ['下班', '測試店', '12', '2'],
   { isValid: false, needResponse: false },
   '測試人員'
 );
 assert.equal(checkout.isValid, true);
-assert.equal(checkout.shiftSalesCount, 10);
-assert.equal(checkout.salesRatio, 40);
+assert.equal(checkout.endCount, 12);
+assert.equal(checkout.samsungCount, 2);
+assert.ok(Math.abs(checkout.salesRatio - (100 / 6)) < 1e-10);
 
-const backwardsCheckout = context.analyzeCheckOut(
-  ['下班', '測試店', '9', '0'],
+// 同日第二組正式案例：到點 1、下班 2、Samsung 2 必須回覆 100.0%。
+rows = [[new Date(now - 60_000), 'arrival-2', '測試人員2', '測試店2', '到點', 1]];
+const allSamsungCheckout = context.analyzeCheckOut(
+  ['下班', '測試店2', '2', '2'],
+  { isValid: false, needResponse: false },
+  '測試人員2'
+);
+assert.equal(allSamsungCheckout.isValid, true);
+assert.equal(allSamsungCheckout.salesRatio, 100);
+assert.match(context.generateResponse(allSamsungCheckout, '測試人員2'), /今日銷售佔比為 100\.0%/);
+
+rows = [[new Date(now - 60_000), 'arrival-3', '測試人員', '測試店', '到點', 0]];
+const samsungOverTotal = context.analyzeCheckOut(
+  ['下班', '測試店', '1', '2'],
   { isValid: false, needResponse: false },
   '測試人員'
 );
-assert.equal(backwardsCheckout.isValid, false);
-assert.match(backwardsCheckout.message, /不能小於到點初始台數/);
+assert.equal(samsungOverTotal.isValid, false);
+assert.match(samsungOverTotal.message, /不能大於下班總台數/);
 
 const zeroDeltaReply = context.generateResponse({
   type: '下班',
-  shiftSalesCount: 0,
+  endCount: 0,
   samsungCount: 0,
   salesRatio: 0
 }, '測試人員');
 assert.match(zeroDeltaReply, /當班全店無銷售任何螢幕/);
 
-rows = [[new Date(now - 3_600_000), 'invalid', '測試人員', '測試店', '到點', '']];
-const invalidStart = context.getStartReport('測試人員', '測試店');
-assert.equal(invalidStart.startCount, null);
-assert.match(invalidStart.message, /初始台數無法辨識/);
-
 rows = [];
-const missingStart = context.getStartReport('測試人員', '測試店');
-assert.equal(missingStart.startCount, null);
-assert.match(missingStart.message, /請先報到/);
+const missingStart = context.checkStartReport('測試人員', '測試店');
+assert.match(missingStart, /請先報到/);
 
 assert.match(source, /getRange\(1,\s*4,\s*lastRow,\s*2\)/, 'LINE 姓名仍須固定只讀 D:E');
 assert.match(mainSource, /getRange\("G2:G"\s*\+\s*sheet\.getLastRow\(\)\)/, '店點白名單仍須固定讀 G');

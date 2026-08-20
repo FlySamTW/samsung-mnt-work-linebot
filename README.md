@@ -36,4 +36,4 @@ LINE PUSH 成功後，主動通知會寫入既有的 `ALL` 工作表；若 PUSH 
 
 執行 `node verify_merch_alert_gateway.mjs`。此測試不連線 LINE、不耗用額度，會檢查簽章、固定群組、去重、主動通知月額硬上限、一般類別封鎖、狀態快照、`/商化` 回覆、中斷／恢復放行，以及通知程式變更是否同步防復發台帳。
 
-銷售群組的到點／下班數字規則另執行 `node verify_sales_shift.mjs`，會驗證當班增量、三星占比、零銷量、倒退與超額防呆；同樣只在本機執行，不會寫入 Google Sheet 或發送 LINE 訊息。
+銷售群組的到點／下班數字規則另執行 `node verify_sales_shift.mjs`，會驗證既有 LINE 下班占比、到點存在、零銷量、Samsung 超過下班總台數與固定 9 欄寫入；同樣只在本機執行，不會寫入 Google Sheet 或發送 LINE 訊息。
