@@ -15,6 +15,26 @@ var SALES_DUTY_HEADERS = [
   '初始台數', '結束台數', '三星台數', '記錄時間'
 ];
 
+// 新竹／竹北店歷史上曾使用多種名稱；正式顯示與新寫入一律統一為「順發竹北」。
+// 只在銷售勤務內正規化，不影響商化店點或其他群組。
+function normalizeSalesStoreName_(store) {
+  const original = String(store || '').trim();
+  const compact = original.replace(/\s+/g, '');
+  const aliases = {
+    '新竹順發': '順發竹北',
+    '竹北順發': '順發竹北',
+    '順發竹北店': '順發竹北',
+    '順發新竹': '順發竹北',
+    '新竹竹北': '順發竹北',
+    '順發竹北': '順發竹北'
+  };
+  return aliases[compact] || original;
+}
+
+function getCanonicalValidSalesStoreNames_() {
+  return Array.from(new Set(getValidStoreNames().map(normalizeSalesStoreName_).filter(Boolean)));
+}
+
 function getSalesDutyWriteMode_() {
   try {
     const value = PropertiesService.getScriptProperties().getProperty(SALES_DUTY_WRITE_MODE_PROPERTY);
@@ -88,7 +108,7 @@ function buildSalesDutyRow_(timestamp, messageId, displayName, store, type, star
     new Date(timestamp),
     messageId,
     displayName,
-    store,
+    normalizeSalesStoreName_(store),
     type,
     startCount,
     endCount,
@@ -275,9 +295,10 @@ function processSalesGroupMessage(timestamp, messageId, userId, message) {
         return null;
     }
 
-    if (result.isValid && !getValidStoreNames().includes(result.store)) {
+    const validStoreNames = getCanonicalValidSalesStoreNames_();
+    if (result.isValid && !validStoreNames.includes(result.store)) {
       result.isValid = false;
-      result.message = '無效的店點名稱。Valid store names: ' + JSON.stringify(getValidStoreNames());
+      result.message = '無效的店點名稱。Valid store names: ' + JSON.stringify(validStoreNames);
       result.needResponse = true;
     }
 
@@ -323,8 +344,10 @@ function analyzePunchIn(parts, result, displayName) {
     return result;
   }
 
+  const store = normalizeSalesStoreName_(parts[1]);
+
   // 檢查重複報到
-  const duplicateReport = checkDuplicateReport(displayName, { store: parts[1] });
+  const duplicateReport = checkDuplicateReport(displayName, { store });
   if (duplicateReport) {
     result.message = duplicateReport;
     result.needResponse = true;
@@ -334,7 +357,7 @@ function analyzePunchIn(parts, result, displayName) {
   result.isValid = true;
   result.needResponse = true;
   result.type = '到點';
-  result.store = parts[1];
+  result.store = store;
   result.startCount = startCount;
 
   return result;
@@ -357,9 +380,11 @@ function analyzeCheckOut(parts, result, displayName) {
     return result;
   }
 
+  const store = normalizeSalesStoreName_(parts[1]);
+
   // 既有 LINE 流程只要求同人同店當日有到點紀錄。
   // 到點初始台數與下班總台數不是可強制單調遞增的累計對，不得相減後阻擋下班。
-  const startReportError = checkStartReport(displayName, parts[1]);
+  const startReportError = checkStartReport(displayName, store);
   if (startReportError) {
     result.message = startReportError;
     result.needResponse = true;
@@ -375,7 +400,7 @@ function analyzeCheckOut(parts, result, displayName) {
   result.isValid = true;
   result.needResponse = true;
   result.type = '下班';
-  result.store = parts[1];
+  result.store = store;
   result.endCount = endCount;
   result.samsungCount = samsungCount;
   result.salesRatio = endCount === 0 ? 0 : (samsungCount / endCount) * 100;
@@ -403,7 +428,7 @@ function checkDuplicateReport(displayName, result) {
       
       if (recordDate.getTime() === today.getTime() && 
           row[2] === displayName && 
-          row[3] === result.store && 
+          normalizeSalesStoreName_(row[3]) === normalizeSalesStoreName_(result.store) &&
           row[4] === '到點') {
         return `${displayName} 今天已經在 ${result.store} 報到過了`;
       }
@@ -419,6 +444,7 @@ function checkDuplicateReport(displayName, result) {
 // 檢查同一人員、同一店點今日是否已有到點紀錄。
 function checkStartReport(displayName, store) {
   try {
+    const canonicalStore = normalizeSalesStoreName_(store);
     const sheet = getSalesDutyReadSheet_();
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -438,13 +464,13 @@ function checkStartReport(displayName, store) {
       
       if (recordDate.getTime() === today.getTime() && 
           row[2] === displayName && 
-          row[3] === store && 
+          normalizeSalesStoreName_(row[3]) === canonicalStore &&
           row[4] === '到點') {
         return null;
       }
     }
 
-    return `${displayName} 今天尚未在 ${store} 報到，請先報到`;
+    return `${displayName} 今天尚未在 ${canonicalStore} 報到，請先報到`;
   } catch (error) {
     writeLog("Error in checkStartReport: " + error.toString());
     return '目前無法讀取到點紀錄，請稍後再試';

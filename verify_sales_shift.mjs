@@ -138,6 +138,21 @@ legacySheet.data = [
 ];
 assert.equal(context.checkStartReport('測試人員', '測試店'), null);
 
+// 順發竹北歷史別名必須視為同一店；新寫入一律使用正式名稱。
+assert.equal(context.normalizeSalesStoreName_('新竹順發'), '順發竹北');
+assert.equal(context.normalizeSalesStoreName_('竹北順發'), '順發竹北');
+assert.equal(context.normalizeSalesStoreName_('順發 竹北店'), '順發竹北');
+assert.equal(context.normalizeSalesStoreName_('新竹竹北'), '順發竹北');
+legacySheet.data = [[new Date(now - 60_000), 'hsinchu-arrival', '王聖華', '新竹順發', '到點', 3]];
+assert.equal(
+  context.checkStartReport('王聖華', '順發竹北'),
+  null,
+  '舊名稱到點後，使用新名稱下班仍必須成功配對'
+);
+const canonicalRow = context.buildSalesDutyRow_(now, 'canonical-store', '王聖華', '竹北順發', '下班', null, 2, 1);
+assert.equal(canonicalRow[3], '順發竹北', '新勤務列只可寫入正式店名');
+legacySheet.data = [[new Date(now - 60_000), 'arrival-restored', '測試人員', '測試店', '到點', 14]];
+
 // 2026/08/20 正式現場案例：到點 14、下班 12、Samsung 2 必須允許。
 // 既有 LINE 輸入只以下班總台數作為占比分母，不與到點初始台數相減。
 const checkout = context.analyzeCheckOut(
