@@ -15,28 +15,24 @@ function getValidStoreNames() {
     var values = range.getValues();
     var storeNames = [];
     
-    writeLog("Reading range G2:G" + sheet.getLastRow() + " | ");
     for (var i = 0; i < values.length; i++) {
       var cellValue = values[i][0];
-      writeLog("Row " + (i + 2) + ": Raw Value = " + JSON.stringify(cellValue) + " (Type: " + (typeof cellValue) + ") | ");
       if (cellValue !== null && cellValue !== undefined) {
         if (typeof cellValue === "string") {
           var trimmedValue = cellValue.trim();
           if (trimmedValue) {
             storeNames.push(trimmedValue);
-            writeLog("Row " + (i + 2) + ": Added '" + trimmedValue + "' (Length: " + trimmedValue.length + ") | ");
           }
         } else if (typeof cellValue === "number") {
           var strValue = cellValue.toString().trim();
           if (strValue) {
             storeNames.push(strValue);
-            writeLog("Row " + (i + 2) + ": Added (number) '" + strValue + "' (Length: " + strValue.length + ") | ");
           }
         }
       }
     }
     
-    writeLog("Final storeNames array: " + JSON.stringify(storeNames));
+    // 每列寫 LOG 都會 insert/flush；批次文字須及時使用各自的 LINE replyToken。
     return storeNames;
   } catch (error) {
     writeLog("Error in getValidStoreNames: " + error.toString());
@@ -118,22 +114,30 @@ function doPost(e) {
     if (isMntAlertPayload_(requestBody)) {
       return handleMntAlertRequest_(requestBody);
     }
-    const events = requestBody.events;
-    
-    if (events && events.length > 0) {
-      const event = events[0];
-      if (event.type === 'message' && 
-          event.message.type === 'text' && 
-          !event.deliveryContext?.isRedelivery) {
-        
-        // 加入重複訊息檢查
-        if (isMessageIdExists(event.message.id, ALL_SHEET_NAME)) {
-          writeLog("重複訊息，跳過處理 | ");
-          return HtmlService.createHtmlOutput('OK');
-        }
-
-        writeLog("收到訊息: " + JSON.stringify(event) + " | ");
+    const events = Array.isArray(requestBody.events) ? requestBody.events : [];
+    // 只留事件類型與 ID，供追查入口略過原因；不得把 reply/quote/read token 寫入日誌。
+    if (events.length) {
+      console.log(JSON.stringify({
+        kind: 'line-webhook-batch',
+        events: events.map(event => ({
+          type: event && event.type || '',
+          messageType: event && event.message && event.message.type || '',
+          messageId: event && event.message && event.message.id || '',
+          redelivery: !!(event && event.deliveryContext && event.deliveryContext.isRedelivery)
+        }))
+      }));
+    }
+    for (let index = 0; index < events.length; index++) {
+      const event = events[index];
+      // 照片／其他事件只略過該筆；不可漏掉同批後面的文字或另一位人員。
+      if (!event || event.type !== 'message' || !event.message ||
+          event.message.type !== 'text' || !event.message.id) continue;
+      try {
+        // 重送也依訊息 ID 判斷：未曾處理的可補收，已保存的不可再次打卡／回覆。
+        if (isMessageIdExists(event.message.id, ALL_SHEET_NAME)) continue;
         processMessage(event);
+      } catch (eventError) {
+        writeLog('Error in webhook event | messageId=' + event.message.id + ' | ' + eventError.toString());
       }
     }
 

@@ -38,6 +38,8 @@ LINE PUSH 成功後，主動通知會寫入既有的 `ALL` 工作表；若 PUSH 
 
 銷售群組的到點／下班數字規則另執行 `node verify_sales_shift.mjs`，會驗證既有 LINE 下班占比、到點存在、零銷量、Samsung 超過下班總台數、一般店固定 9 欄寫入，以及活動支援的人員資格、台北日期、跨活動隔離、全場累計快照與雙寫尾欄；同樣只在本機執行，不會寫入 Google Sheet 或發送 LINE 訊息。
 
+批次收件另執行 `node verify_webhook_batch.mjs`：使用真實入口、銷售處理與記錄函式，搭配隔離的 Sheets／LINE 介面，驗證照片後文字、多位人員、首筆重複、單筆異常及未見過的重送都不漏接；同一訊息不重複打卡或回覆。一般聊天維持安靜，編輯舊訊息不覆寫打卡。入口 Cloud Logging 只留事件類型／訊息 ID／重送旗標，不留 LINE reply、quote、read token；店點白名單維持原 G 欄驗證，取消逐列寫入除錯日誌。
+
 ## 銷售勤務新舊雙寫
 
 - 新制工作簿：<https://docs.google.com/spreadsheets/d/1dNJxwn8HaY6dnGh7pogsoscg6Oo3nVfW8wxpLNGv2Q4/edit>
