@@ -17,11 +17,6 @@ var SALES_DUTY_HEADERS = [
 // A:I 的既有契約不變；只有活動勤務使用 J:K 保存活動歸屬與當時名稱。
 var SALES_DUTY_ACTIVITY_HEADERS = ['activity_id', 'activity_name_snapshot'];
 var SALES_ACTIVITY_STORE_NAME = '活動支援';
-var SALES_ACTIVITY_SETTINGS_SHEET_NAME = '活動支援設定';
-var SALES_ACTIVITY_SETTINGS_HEADERS = [
-  'activity_id', 'name', 'start_date', 'end_date',
-  'latitude', 'longitude', 'radius_m', 'active'
-];
 
 function salesActivityIsEnabled_(value) {
   return value === true || value === 1 || /^(true|1|yes|y|on|是|啟用)$/i.test(String(value || '').trim());
@@ -57,74 +52,19 @@ function getSalesActivityMember_(userId) {
   return { reporter_id: reporterId, name: name };
 }
 
-function getSalesActivityOptions_(timestamp) {
-  const day = salesActivityDateKey_(timestamp === undefined ? new Date() : timestamp);
-  if (!day) throw new Error('活動日期無效');
-  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SALES_ACTIVITY_SETTINGS_SHEET_NAME);
-  if (!sheet || sheet.getLastRow() < 2) return [];
-  const headers = sheet.getRange(1, 1, 1, SALES_ACTIVITY_SETTINGS_HEADERS.length).getValues()[0];
-  if (!SALES_ACTIVITY_SETTINGS_HEADERS.every((header, index) => String(headers[index] || '').trim() === header)) {
-    throw new Error('活動支援設定標題列不符');
-  }
-  const ids = new Set();
-  return sheet.getRange(2, 1, sheet.getLastRow() - 1, SALES_ACTIVITY_SETTINGS_HEADERS.length).getValues()
-    .map(row => {
-      if (!salesActivityIsEnabled_(row[7])) return null;
-      const id = String(row[0] || '').trim();
-      const name = String(row[1] || '').trim();
-      const start = salesActivityDateKey_(row[2]);
-      const end = salesActivityDateKey_(row[3]);
-      if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$/.test(id) || !name || !start || !end || start > end || ids.has(id)) {
-        throw new Error('活動支援設定有重複代碼或無效欄位');
-      }
-      ids.add(id);
-      return start <= day && day <= end ? { activity_id: id, name: name } : null;
-    }).filter(Boolean);
-}
-
-function salesActivitySelectionMessage_(parts, options) {
-  const countStart = parts.length === (parts[0] === '到點' ? 4 : 5) ? 3 : 2;
-  const counts = parts.slice(countStart);
-  return '今天有多場活動，請複製對應活動的格式回報：\n' + options.map(activity =>
-    activity.name + '\n' + [parts[0], SALES_ACTIVITY_STORE_NAME, activity.activity_id].concat(counts).join('/')
-  ).join('\n\n') + '\n台數請填今日活動現場全體累計；個人成交另填銷售回報表。';
-}
-
-// 單一活動自動帶入；多場活動須明確選定，不能默認第一場或沿用別場勤務。
+// 通用活動支援不依賴活動名稱、日期、座標或設定工作表。
 function resolveSalesActivityCommand_(parts, result) {
-  const baseLength = parts[0] === '到點' ? 3 : 4;
   if (normalizeSalesStoreName_(parts[1]) !== SALES_ACTIVITY_STORE_NAME) return parts;
-  if (parts.length !== baseLength && parts.length !== baseLength + 1) {
+  const expected = parts[0] === '到點' ? 3 : 4;
+  if (parts.length !== expected) {
     result.message = parts[0] === '到點'
-      ? '格式錯誤，正確格式為：到點/活動支援/初始台數；多場時用：到點/活動支援/活動ID/初始台數'
-      : '格式錯誤，正確格式為：下班/活動支援/總台數/三星台數；多場時用：下班/活動支援/活動ID/總台數/三星台數';
+      ? '格式錯誤，正確格式為：到點/活動支援/初始台數'
+      : '格式錯誤，正確格式為：下班/活動支援/總台數/三星台數';
     result.needResponse = true;
     return null;
   }
-  let options;
-  try {
-    options = getSalesActivityOptions_(result.timestamp);
-  } catch (error) {
-    writeLog('Sales activity settings unavailable | ' + error.toString());
-    result.message = '目前無法確認活動設定，請稍後再試或請主管確認。';
-    result.needResponse = true;
-    return null;
-  }
-  if (!options.length) {
-    result.message = '目前沒有可填報的活動支援，請確認活動日期或請主管新增活動設定。';
-    result.needResponse = true;
-    return null;
-  }
-  const selector = parts.length === baseLength + 1 ? parts[2] : '';
-  const matches = selector ? options.filter(activity => activity.activity_id === selector || activity.name === selector) : options;
-  if (matches.length !== 1) {
-    result.message = (selector ? '所選活動不在今日可用名單，或名稱重複，請使用活動ID。\n' : '') +
-      salesActivitySelectionMessage_(parts, options);
-    result.needResponse = true;
-    return null;
-  }
-  result.activity = matches[0];
-  return selector ? [parts[0], parts[1]].concat(parts.slice(3)) : parts;
+  result.activity = { activity_id: 'SALES_ACTIVITY_SUPPORT', name: SALES_ACTIVITY_STORE_NAME };
+  return parts;
 }
 
 // 新竹／竹北店歷史上曾使用多種名稱；正式顯示與新寫入一律統一為「順發竹北」。
@@ -682,7 +622,7 @@ function generateResponse(result, displayName) {
 
   if (result.type === '到點') {
     if (result.activity) {
-      return `${displayName} 上班打卡成功\n活動支援｜${result.activity.name}\n台數填今日活動現場全體累計；個人成交請填銷售回報表。`;
+      return `${displayName} 上班打卡成功\n活動支援\n台數填今日活動現場全體累計；個人成交請填銷售回報表。`;
     }
     return `${displayName} 上班打卡成功`;
   }
@@ -693,7 +633,7 @@ function generateResponse(result, displayName) {
     const timeStr = `${now.getMonth() + 1}/${now.getDate()}(${weekdays[now.getDay()]}) ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
 
     if (result.activity) {
-      return `${timeStr}\n${displayName} 下班打卡成功\n活動支援｜${result.activity.name}\n今日活動現場累計：總台數 ${result.endCount}、三星 ${result.samsungCount}\n活動銷售佔比 ${result.salesRatio.toFixed(1)}%\n同場人員填截至當時的全場累計；個人成交請填銷售回報表。`;
+      return `${timeStr}\n${displayName} 下班打卡成功\n活動支援\n今日活動現場累計：總台數 ${result.endCount}、三星 ${result.samsungCount}\n活動銷售佔比 ${result.salesRatio.toFixed(1)}%\n同場人員填截至當時的全場累計；個人成交請填銷售回報表。`;
     }
 
     if (result.endCount === 0) {
