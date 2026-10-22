@@ -14,6 +14,118 @@ var SALES_DUTY_HEADERS = [
   '時間戳記', '訊息ID', '使用者名稱', '店點', '類型',
   '初始台數', '結束台數', '三星台數', '記錄時間'
 ];
+// A:I 的既有契約不變；只有活動勤務使用 J:K 保存活動歸屬與當時名稱。
+var SALES_DUTY_ACTIVITY_HEADERS = ['activity_id', 'activity_name_snapshot'];
+var SALES_ACTIVITY_STORE_NAME = '活動支援';
+var SALES_ACTIVITY_SETTINGS_SHEET_NAME = '活動支援設定';
+var SALES_ACTIVITY_SETTINGS_HEADERS = [
+  'activity_id', 'name', 'start_date', 'end_date',
+  'latitude', 'longitude', 'radius_m', 'active'
+];
+
+function salesActivityIsEnabled_(value) {
+  return value === true || value === 1 || /^(true|1|yes|y|on|是|啟用)$/i.test(String(value || '').trim());
+}
+
+function salesActivityDateKey_(value) {
+  if (typeof value === 'string') {
+    const match = value.trim().match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$/);
+    if (match) {
+      const key = match[1] + '-' + match[2].padStart(2, '0') + '-' + match[3].padStart(2, '0');
+      const parsed = new Date(key + 'T00:00:00Z');
+      if (isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== key) return '';
+      return key;
+    }
+  }
+  const date = value instanceof Date ? value : new Date(value);
+  if (value === null || value === undefined || value === '' || isNaN(date.getTime())) return '';
+  return Utilities.formatDate(date, 'Asia/Taipei', 'yyyy-MM-dd');
+}
+
+// 新活動流程才查正式銷售身分；不變更原店點的既有使用規則或 D:M 資料。
+function getSalesActivityMember_(userId) {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('群組&姓名對應');
+  if (!sheet || sheet.getLastRow() < 2 || !String(userId || '').trim()) return null;
+  const matches = sheet.getRange(2, 4, sheet.getLastRow() - 1, 10).getValues()
+    .filter(row => String(row[0] || '').trim() === String(userId).trim());
+  if (matches.length !== 1) return null;
+  const row = matches[0];
+  const reporterId = String(row[4] || '').trim(); // H：銷售人員 ID
+  const name = String(row[7] || row[1] || '').trim(); // K 正式姓名，備援 E
+  if (!reporterId || !name || !salesActivityIsEnabled_(row[5])) return null; // I：啟用
+  if (/^(test|temporary|temp)(?:$|[-_\s\d])/i.test(reporterId) || /^(test|temporary|測試(?:人員|帳號)?)$/i.test(name)) return null;
+  return { reporter_id: reporterId, name: name };
+}
+
+function getSalesActivityOptions_(timestamp) {
+  const day = salesActivityDateKey_(timestamp === undefined ? new Date() : timestamp);
+  if (!day) throw new Error('活動日期無效');
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SALES_ACTIVITY_SETTINGS_SHEET_NAME);
+  if (!sheet || sheet.getLastRow() < 2) return [];
+  const headers = sheet.getRange(1, 1, 1, SALES_ACTIVITY_SETTINGS_HEADERS.length).getValues()[0];
+  if (!SALES_ACTIVITY_SETTINGS_HEADERS.every((header, index) => String(headers[index] || '').trim() === header)) {
+    throw new Error('活動支援設定標題列不符');
+  }
+  const ids = new Set();
+  return sheet.getRange(2, 1, sheet.getLastRow() - 1, SALES_ACTIVITY_SETTINGS_HEADERS.length).getValues()
+    .map(row => {
+      if (!salesActivityIsEnabled_(row[7])) return null;
+      const id = String(row[0] || '').trim();
+      const name = String(row[1] || '').trim();
+      const start = salesActivityDateKey_(row[2]);
+      const end = salesActivityDateKey_(row[3]);
+      if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$/.test(id) || !name || !start || !end || start > end || ids.has(id)) {
+        throw new Error('活動支援設定有重複代碼或無效欄位');
+      }
+      ids.add(id);
+      return start <= day && day <= end ? { activity_id: id, name: name } : null;
+    }).filter(Boolean);
+}
+
+function salesActivitySelectionMessage_(parts, options) {
+  const countStart = parts.length === (parts[0] === '到點' ? 4 : 5) ? 3 : 2;
+  const counts = parts.slice(countStart);
+  return '今天有多場活動，請複製對應活動的格式回報：\n' + options.map(activity =>
+    activity.name + '\n' + [parts[0], SALES_ACTIVITY_STORE_NAME, activity.activity_id].concat(counts).join('/')
+  ).join('\n\n') + '\n台數請填今日活動現場全體累計；個人成交另填銷售回報表。';
+}
+
+// 單一活動自動帶入；多場活動須明確選定，不能默認第一場或沿用別場勤務。
+function resolveSalesActivityCommand_(parts, result) {
+  const baseLength = parts[0] === '到點' ? 3 : 4;
+  if (normalizeSalesStoreName_(parts[1]) !== SALES_ACTIVITY_STORE_NAME) return parts;
+  if (parts.length !== baseLength && parts.length !== baseLength + 1) {
+    result.message = parts[0] === '到點'
+      ? '格式錯誤，正確格式為：到點/活動支援/初始台數；多場時用：到點/活動支援/活動ID/初始台數'
+      : '格式錯誤，正確格式為：下班/活動支援/總台數/三星台數；多場時用：下班/活動支援/活動ID/總台數/三星台數';
+    result.needResponse = true;
+    return null;
+  }
+  let options;
+  try {
+    options = getSalesActivityOptions_(result.timestamp);
+  } catch (error) {
+    writeLog('Sales activity settings unavailable | ' + error.toString());
+    result.message = '目前無法確認活動設定，請稍後再試或請主管確認。';
+    result.needResponse = true;
+    return null;
+  }
+  if (!options.length) {
+    result.message = '目前沒有可填報的活動支援，請確認活動日期或請主管新增活動設定。';
+    result.needResponse = true;
+    return null;
+  }
+  const selector = parts.length === baseLength + 1 ? parts[2] : '';
+  const matches = selector ? options.filter(activity => activity.activity_id === selector || activity.name === selector) : options;
+  if (matches.length !== 1) {
+    result.message = (selector ? '所選活動不在今日可用名單，或名稱重複，請使用活動ID。\n' : '') +
+      salesActivitySelectionMessage_(parts, options);
+    result.needResponse = true;
+    return null;
+  }
+  result.activity = matches[0];
+  return selector ? [parts[0], parts[1]].concat(parts.slice(3)) : parts;
+}
 
 // 新竹／竹北店歷史上曾使用多種名稱；正式顯示與新寫入一律統一為「順發竹北」。
 // 只在銷售勤務內正規化，不影響商化店點或其他群組。
@@ -21,6 +133,8 @@ function normalizeSalesStoreName_(store) {
   const original = String(store || '').trim();
   const compact = original.replace(/\s+/g, '');
   const aliases = {
+    'SALES_ACTIVITY_SUPPORT': SALES_ACTIVITY_STORE_NAME,
+    '活動支援': SALES_ACTIVITY_STORE_NAME,
     '新竹順發': '順發竹北',
     '竹北順發': '順發竹北',
     '順發竹北店': '順發竹北',
@@ -32,7 +146,7 @@ function normalizeSalesStoreName_(store) {
 }
 
 function getCanonicalValidSalesStoreNames_() {
-  return Array.from(new Set(getValidStoreNames().map(normalizeSalesStoreName_).filter(Boolean)));
+  return Array.from(new Set(getValidStoreNames().map(normalizeSalesStoreName_).filter(Boolean).concat([SALES_ACTIVITY_STORE_NAME])));
 }
 
 function getSalesDutyWriteMode_() {
@@ -80,6 +194,34 @@ function getNewSalesDutySheet_() {
   return ensureSalesDutySheetContract_(sheet);
 }
 
+function getSalesDutyReadWidth_(sheet) {
+  const required = SALES_DUTY_HEADERS.length + SALES_DUTY_ACTIVITY_HEADERS.length;
+  if (sheet.getMaxColumns() < required) return SALES_DUTY_HEADERS.length;
+  const header = sheet.getRange(1, SALES_DUTY_HEADERS.length + 1, 1, SALES_DUTY_ACTIVITY_HEADERS.length).getValues()[0];
+  if (SALES_DUTY_ACTIVITY_HEADERS.every((name, index) => String(header[index] || '').trim() === name)) return required;
+  return SALES_DUTY_HEADERS.length;
+}
+
+function ensureSalesDutyActivityColumns_(sheet) {
+  const required = SALES_DUTY_HEADERS.length + SALES_DUTY_ACTIVITY_HEADERS.length;
+  const maxColumns = sheet.getMaxColumns();
+  if (maxColumns < required) sheet.insertColumnsAfter(maxColumns, required - maxColumns);
+  const range = sheet.getRange(1, SALES_DUTY_HEADERS.length + 1, 1, SALES_DUTY_ACTIVITY_HEADERS.length);
+  const header = range.getValues()[0];
+  if (!header.every((value, index) => !String(value || '').trim() || String(value).trim() === SALES_DUTY_ACTIVITY_HEADERS[index])) {
+    throw new Error('勤務 J:K 已有其他欄位，拒絕覆寫');
+  }
+  if (!SALES_DUTY_ACTIVITY_HEADERS.every((name, index) => String(header[index] || '').trim() === name)) {
+    // 只有欄位名稱空白且下方無資料才可以補標題，避免覆蓋既有未知資料。
+    if (sheet.getLastRow() > 1 && sheet.getRange(2, SALES_DUTY_HEADERS.length + 1, sheet.getLastRow() - 1, SALES_DUTY_ACTIVITY_HEADERS.length)
+      .getValues().some(row => row.some((value, index) => !String(header[index] || '').trim() && String(value || '').trim()))) {
+      throw new Error('勤務 J:K 有未識別資料，拒絕覆寫');
+    }
+    range.setValues([SALES_DUTY_ACTIVITY_HEADERS]);
+    range.setBackground('#ffffff').setFontColor('#000000').setFontWeight('bold');
+  }
+}
+
 function getSalesDutyReadSheet_() {
   return getSalesDutyWriteMode_() === SALES_DUTY_WRITE_MODE_NEW_ONLY
     ? getNewSalesDutySheet_()
@@ -96,15 +238,21 @@ function salesDutyMessageExists_(sheet, messageId) {
 
 function writeSalesDutyRow_(sheet, row) {
   if (salesDutyMessageExists_(sheet, row[1])) return false;
+  const activityRow = normalizeSalesStoreName_(row[3]) === SALES_ACTIVITY_STORE_NAME;
+  if (activityRow) {
+    if (!String(row[9] || '').trim() || !String(row[10] || '').trim()) throw new Error('活動勤務缺少活動ID或名稱');
+    ensureSalesDutyActivityColumns_(sheet);
+  }
+  const values = row.slice(0, activityRow ? 11 : SALES_DUTY_HEADERS.length);
   sheet.insertRowBefore(2);
-  sheet.getRange(2, 1, 1, SALES_DUTY_HEADERS.length).setValues([row]);
+  sheet.getRange(2, 1, 1, values.length).setValues([values]);
   sheet.getRange(2, 1).setNumberFormat('yyyy/MM/dd HH:mm:ss');
   sheet.getRange(2, 9).setNumberFormat('yyyy/MM/dd HH:mm:ss');
   return true;
 }
 
-function buildSalesDutyRow_(timestamp, messageId, displayName, store, type, startCount, endCount, samsungCount) {
-  return [
+function buildSalesDutyRow_(timestamp, messageId, displayName, store, type, startCount, endCount, samsungCount, activity) {
+  const row = [
     new Date(timestamp),
     messageId,
     displayName,
@@ -115,6 +263,13 @@ function buildSalesDutyRow_(timestamp, messageId, displayName, store, type, star
     samsungCount,
     new Date()
   ];
+  if (row[3] === SALES_ACTIVITY_STORE_NAME) {
+    if (!activity || !String(activity.activity_id || '').trim() || !String(activity.name || '').trim()) {
+      throw new Error('活動勤務必須指定活動ID與名稱');
+    }
+    row.push(String(activity.activity_id).trim(), String(activity.name).trim());
+  }
+  return row;
 }
 
 function syncSalesDutyHistoryToNew_() {
@@ -124,7 +279,7 @@ function syncSalesDutyHistoryToNew_() {
   if (sourceLastRow <= 1) return { sourceRows: 0, insertedRows: 0, missingAfter: 0 };
 
   const since = new Date(SALES_DUTY_SYNC_SINCE + 'T00:00:00+08:00');
-  const sourceRows = source.getRange(2, 1, sourceLastRow - 1, SALES_DUTY_HEADERS.length).getValues()
+  const sourceRows = source.getRange(2, 1, sourceLastRow - 1, getSalesDutyReadWidth_(source)).getValues()
     .filter(row => row[0] instanceof Date && !isNaN(row[0].getTime()) && row[0].getTime() >= since.getTime());
   let insertedRows = 0;
   sourceRows.slice().reverse().forEach(row => {
@@ -262,8 +417,22 @@ function getCustomDisplayName(userId) {
 // 處理銷售群組訊息
 function processSalesGroupMessage(timestamp, messageId, userId, message) {
   try {
-    const displayName = getCustomDisplayName(userId);
     const parts = message.split('/').map(part => part.trim());
+    const isActivity = ['到點', '下班'].includes(parts[0]) && normalizeSalesStoreName_(parts[1]) === SALES_ACTIVITY_STORE_NAME;
+    let displayName;
+    if (isActivity) {
+      let member;
+      try {
+        member = getSalesActivityMember_(userId);
+      } catch (error) {
+        writeLog('Sales activity member lookup unavailable | ' + error.toString());
+        return '目前無法確認銷售人員資格，請稍後再試。';
+      }
+      if (!member) return '活動支援限已啟用且綁定 LINE 的正式銷售人員，請主管確認人員設定。';
+      displayName = member.name;
+    } else {
+      displayName = getCustomDisplayName(userId);
+    }
     
     let result = {
       isValid: false,
@@ -275,7 +444,9 @@ function processSalesGroupMessage(timestamp, messageId, userId, message) {
       startCount: null,
       endCount: null,
       samsungCount: null,
-      salesRatio: null
+      salesRatio: null,
+      timestamp: timestamp,
+      activity: null
     };
 
     if (parts.length < 2) {
@@ -312,7 +483,8 @@ function processSalesGroupMessage(timestamp, messageId, userId, message) {
         result.type,
         result.startCount,
         result.endCount,
-        result.samsungCount
+        result.samsungCount,
+        result.activity
       );
       if (!recorded) {
         result.isValid = false;
@@ -331,6 +503,8 @@ function processSalesGroupMessage(timestamp, messageId, userId, message) {
 
 // 分析到點訊息
 function analyzePunchIn(parts, result, displayName) {
+  parts = resolveSalesActivityCommand_(parts, result);
+  if (!parts) return result;
   if (parts.length !== 3) {
     result.message = '格式錯誤，正確格式為：到點/店點/初始台數';
     result.needResponse = true;
@@ -347,7 +521,7 @@ function analyzePunchIn(parts, result, displayName) {
   const store = normalizeSalesStoreName_(parts[1]);
 
   // 檢查重複報到
-  const duplicateReport = checkDuplicateReport(displayName, { store });
+  const duplicateReport = checkDuplicateReport(displayName, { store: store, activity: result.activity, timestamp: result.timestamp });
   if (duplicateReport) {
     result.message = duplicateReport;
     result.needResponse = true;
@@ -365,6 +539,8 @@ function analyzePunchIn(parts, result, displayName) {
 
 // 分析下班訊息
 function analyzeCheckOut(parts, result, displayName) {
+  parts = resolveSalesActivityCommand_(parts, result);
+  if (!parts) return result;
   if (parts.length !== 4) {
     result.message = '格式錯誤，正確格式為：下班/店點/總台數/三星台數';
     result.needResponse = true;
@@ -384,7 +560,7 @@ function analyzeCheckOut(parts, result, displayName) {
 
   // 既有 LINE 流程只要求同人同店當日有到點紀錄。
   // 到點初始台數與下班總台數不是可強制單調遞增的累計對，不得相減後阻擋下班。
-  const startReportError = checkStartReport(displayName, store);
+  const startReportError = checkStartReport(displayName, store, result.activity, result.timestamp);
   if (startReportError) {
     result.message = startReportError;
     result.needResponse = true;
@@ -408,9 +584,27 @@ function analyzeCheckOut(parts, result, displayName) {
   return result;
 }
 
-// 檢查重複報到
+function hasSalesActivityArrival_(displayName, activity, timestamp) {
+  if (!activity || !activity.activity_id) throw new Error('活動勤務缺少活動ID');
+  const day = salesActivityDateKey_(timestamp === undefined ? new Date() : timestamp);
+  if (!day) throw new Error('活動勤務日期無效');
+  const sheet = getSalesDutyReadSheet_();
+  if (sheet.getLastRow() <= 1 || getSalesDutyReadWidth_(sheet) < 11) return false;
+  return sheet.getRange(2, 1, sheet.getLastRow() - 1, 11).getValues().some(row =>
+    salesActivityDateKey_(row[0]) === day &&
+    row[2] === displayName &&
+    normalizeSalesStoreName_(row[3]) === SALES_ACTIVITY_STORE_NAME &&
+    row[4] === '到點' && String(row[9] || '').trim() === activity.activity_id
+  );
+}
+
+// 檢查重複報到；活動須同日、同人、同活動ID，不能只比較共用店名。
 function checkDuplicateReport(displayName, result) {
   try {
+    if (normalizeSalesStoreName_(result.store) === SALES_ACTIVITY_STORE_NAME) {
+      return hasSalesActivityArrival_(displayName, result.activity, result.timestamp)
+        ? `${displayName} 今天已經在 ${result.activity.name} 報到過了` : null;
+    }
     const sheet = getSalesDutyReadSheet_();
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -442,9 +636,13 @@ function checkDuplicateReport(displayName, result) {
 }
 
 // 檢查同一人員、同一店點今日是否已有到點紀錄。
-function checkStartReport(displayName, store) {
+function checkStartReport(displayName, store, activity, timestamp) {
   try {
     const canonicalStore = normalizeSalesStoreName_(store);
+    if (canonicalStore === SALES_ACTIVITY_STORE_NAME) {
+      return hasSalesActivityArrival_(displayName, activity, timestamp)
+        ? null : `${displayName} 今天尚未在 ${activity.name} 報到，請先報到`;
+    }
     const sheet = getSalesDutyReadSheet_();
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -483,6 +681,9 @@ function generateResponse(result, displayName) {
   if (result.message) return result.message;
 
   if (result.type === '到點') {
+    if (result.activity) {
+      return `${displayName} 上班打卡成功\n活動支援｜${result.activity.name}\n台數填今日活動現場全體累計；個人成交請填銷售回報表。`;
+    }
     return `${displayName} 上班打卡成功`;
   }
 
@@ -490,6 +691,10 @@ function generateResponse(result, displayName) {
     const now = new Date();
     const weekdays = ['日', '一', '二', '三', '四', '五', '六'];
     const timeStr = `${now.getMonth() + 1}/${now.getDate()}(${weekdays[now.getDay()]}) ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+
+    if (result.activity) {
+      return `${timeStr}\n${displayName} 下班打卡成功\n活動支援｜${result.activity.name}\n今日活動現場累計：總台數 ${result.endCount}、三星 ${result.samsungCount}\n活動銷售佔比 ${result.salesRatio.toFixed(1)}%\n同場人員填截至當時的全場累計；個人成交請填銷售回報表。`;
+    }
 
     if (result.endCount === 0) {
       return `${timeStr}\n${displayName} 下班打卡成功\n當班全店無銷售任何螢幕`;
@@ -504,11 +709,11 @@ function generateResponse(result, displayName) {
 }
 
 // 記錄銷售資料
-function recordSalesData(timestamp, messageId, userId, displayName, store, type, startCount = null, endCount = null, samsungCount = null) {
+function recordSalesData(timestamp, messageId, userId, displayName, store, type, startCount = null, endCount = null, samsungCount = null, activity = null) {
   const lock = LockService.getScriptLock();
   try {
     lock.waitLock(10000);
-    const row = buildSalesDutyRow_(timestamp, messageId, displayName, store, type, startCount, endCount, samsungCount);
+    const row = buildSalesDutyRow_(timestamp, messageId, displayName, store, type, startCount, endCount, samsungCount, activity);
     const mode = getSalesDutyWriteMode_();
 
     if (mode === SALES_DUTY_WRITE_MODE_NEW_ONLY) {

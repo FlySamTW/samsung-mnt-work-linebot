@@ -19,6 +19,12 @@ function makeSheet(name) {
     header: dutyHeaders.slice(),
     data: [],
     frozenRows: 0,
+    maxColumns: 26,
+    getMaxColumns() { return this.maxColumns; },
+    insertColumnsAfter(column, count) {
+      assert.equal(column, this.maxColumns);
+      this.maxColumns += count;
+    },
     getLastRow() {
       return this.data.length + 1;
     },
@@ -71,8 +77,11 @@ function makeSheet(name) {
 
 const legacySheet = makeSheet('銷售群組');
 const newSheet = makeSheet('LINE勤務');
+const memberSheet = makeSheet('群組&姓名對應');
+const activitySheet = makeSheet('活動支援設定');
+activitySheet.header = ['activity_id', 'name', 'start_date', 'end_date', 'latitude', 'longitude', 'radius_m', 'active'];
 const legacyWorkbook = {
-  getSheetByName: name => name === '銷售群組' ? legacySheet : null
+  getSheetByName: name => ({ 銷售群組: legacySheet, '群組&姓名對應': memberSheet, 活動支援設定: activitySheet })[name] || null
 };
 const newWorkbook = {
   getSheetByName: name => name === 'LINE勤務' ? newSheet : null,
@@ -114,8 +123,18 @@ const context = {
     getScriptLock: () => ({ waitLock: () => {}, releaseLock: () => {} })
   },
   Utilities: {
-    getUuid: () => '00000000-0000-4000-8000-000000000001'
+    getUuid: () => '00000000-0000-4000-8000-000000000001',
+    formatDate: (date, zone, format) => {
+      assert.equal(zone, 'Asia/Taipei');
+      assert.equal(format, 'yyyy-MM-dd');
+      const parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', {
+        timeZone: zone, year: 'numeric', month: '2-digit', day: '2-digit'
+      }).formatToParts(date).map(part => [part.type, part.value]));
+      return `${parts.year}-${parts.month}-${parts.day}`;
+    }
   },
+  getValidStoreNames: () => ['測試店', '測試店2', '順發竹北'],
+  getDisplayName: () => '未綁定人員',
   writeLog: message => logs.push(message)
 };
 
@@ -250,4 +269,123 @@ assert.throws(() => context.setSalesDutyWriteMode('INVALID'), /僅接受 DUAL �
 assert.match(source, /getRange\(1,\s*4,\s*lastRow,\s*2\)/, 'LINE 姓名仍須固定只讀 D:E');
 assert.match(mainSource, /getRange\("G2:G"\s*\+\s*sheet\.getLastRow\(\)\)/, '店點白名單仍須固定讀 G');
 
-console.log('Sales shift verification passed.');
+// 活動支援：同一固定店名下，身分、日期與活動 ID 必須各自正確。
+function memberRow(userId, reporterId, active, name) {
+  const row = Array(13).fill('');
+  row[3] = userId; // D
+  row[4] = name + ' LINE 名稱'; // E
+  row[6] = '原店名不可改'; // G
+  row[7] = reporterId; // H
+  row[8] = active; // I
+  row[10] = name; // K
+  return row;
+}
+memberSheet.data = [
+  memberRow('line-a', 'S001', true, '正式人員甲'),
+  memberRow('line-b', 'S002', 'TRUE', '正式人員乙'),
+  memberRow('line-c', 'S003', '1', '正式人員丙'),
+  memberRow('line-disabled', 'S004', false, '停用人員'),
+  memberRow('line-blank-active', 'S005', '', '未啟用人員'),
+  memberRow('line-no-reporter', '', true, '未設定銷售ID'),
+  memberRow('line-test', 'test', true, '測試帳號'),
+  memberRow('line-temporary', 'temporary_123', true, '臨時帳號')
+];
+const originalMembers = JSON.stringify(memberSheet.data);
+const activityTime = Date.parse('2026-11-06T09:00:00+08:00');
+const expoA = ['EXPO_A', '世貿電器展', '2026-11-06', '2026-11-09', 25.033, 121.56, 300, true];
+const expoB = ['EXPO_B', '另一場活動', '2026-11-06', '2026-11-06', 25, 121, 300, 'TRUE'];
+activitySheet.data = [expoA];
+legacySheet.data = [];
+newSheet.data = [];
+properties.set('SALES_DUTY_WRITE_MODE', 'DUAL');
+assert.equal(context.salesActivityDateKey_('2026-02-30'), '', '不可把錯誤日期自動滾到下個月');
+assert.equal(context.getSalesActivityOptions_(Date.parse('2026-11-05T16:00:00Z')).length, 1, '活動須依台北日期啟用');
+assert.equal(context.getSalesActivityOptions_(Date.parse('2026-11-09T16:00:00Z')).length, 0, '結束日台北午夜後須停用');
+assert.equal(context.getSalesActivityOptions_(Date.parse('2026-11-05T15:59:59Z')).length, 0);
+
+for (const user of ['line-disabled', 'line-blank-active', 'line-no-reporter', 'line-test', 'line-temporary', 'unknown']) {
+  assert.match(context.processSalesGroupMessage(activityTime, 'blocked-' + user, user, '到點/活動支援/0'), /正式銷售人員/);
+}
+assert.equal(legacySheet.data.length, 0, '無資格者不得建立勤務');
+assert.match(context.processSalesGroupMessage(activityTime, 'activity-arrival-a', 'line-a', '到點/活動支援/14'), /正式人員甲 上班打卡成功/);
+assert.equal(legacySheet.data[0].length, 11);
+assert.deepEqual(Array.from(legacySheet.data[0].slice(9)), ['EXPO_A', '世貿電器展']);
+assert.deepEqual(Array.from(legacySheet.header.slice(0, 9)), dutyHeaders, 'A:I 欄名不可改');
+assert.deepEqual(Array.from(newSheet.header.slice(9)), ['activity_id', 'activity_name_snapshot']);
+assert.match(context.processSalesGroupMessage(activityTime, 'activity-arrival-a-duplicate', 'line-a', '到點/活動支援/14'), /報到過了/);
+assert.equal(legacySheet.data.length, 1);
+assert.match(context.processSalesGroupMessage(activityTime, 'activity-no-arrival', 'line-b', '下班/活動支援/12/2'), /請先報到/);
+assert.equal(legacySheet.data.length, 1, '甲的到點不可替乙授權下班');
+assert.match(context.processSalesGroupMessage(activityTime, 'activity-arrival-b', 'line-b', '到點/活動支援/14'), /上班打卡成功/);
+assert.match(context.processSalesGroupMessage(activityTime, 'activity-arrival-c', 'line-c', '到點/活動支援/14'), /上班打卡成功/);
+for (const user of ['line-a', 'line-b', 'line-c']) {
+  const reply = context.processSalesGroupMessage(activityTime + 9 * 3600_000, 'activity-checkout-' + user, user, '下班/活動支援/12/2');
+  assert.match(reply, /下班打卡成功/, '活動也不可強制 end >= initial');
+  assert.match(reply, /今日活動現場累計：總台數 12、三星 2/);
+  assert.match(reply, /個人成交請填銷售回報表/);
+}
+assert.equal(legacySheet.data.filter(row => row[4] === '下班').length, 3, '三人勤務各自保留');
+assert.ok(legacySheet.data.filter(row => row[4] === '下班').every(row => row[6] === 12 && row[7] === 2), '寫入快照，不相加、不扣除到點數');
+assert.equal(newSheet.data.length, legacySheet.data.length);
+assert.match(context.processSalesGroupMessage(activityTime + 86400_000, 'activity-next-day', 'line-a', '下班/活動支援/2/1'), /請先報到/, '昨日到點不可授權今日下班');
+const countBeforeInvalid = legacySheet.data.length;
+assert.match(context.processSalesGroupMessage(activityTime, 'activity-over-total', 'line-a', '下班/活動支援/1/2'), /不能大於下班總台數/);
+assert.match(context.processSalesGroupMessage(activityTime, 'activity-negative', 'line-a', '下班/活動支援/-1/0'), /數字格式/);
+assert.equal(legacySheet.data.length, countBeforeInvalid);
+
+activitySheet.data = [expoA, expoB];
+const selection = context.processSalesGroupMessage(activityTime, 'activity-select', 'line-a', '到點/活動支援/0');
+assert.match(selection, /到點\/活動支援\/EXPO_A\/0/);
+assert.match(selection, /到點\/活動支援\/EXPO_B\/0/);
+assert.equal(legacySheet.data.length, countBeforeInvalid, '多場不可以任選第一場直接寫入');
+assert.match(context.processSalesGroupMessage(activityTime, 'wrong-activity-checkout', 'line-a', '下班/活動支援/EXPO_B/3/1'), /請先報到/);
+assert.match(context.processSalesGroupMessage(activityTime, 'activity-b-arrival', 'line-a', '到點/活動支援/EXPO_B/0'), /上班打卡成功/, '同一人可在不同活動分別打卡');
+assert.match(context.processSalesGroupMessage(activityTime, 'activity-b-checkout', 'line-a', '下班/活動支援/EXPO_B/3/1'), /下班打卡成功/);
+assert.equal(legacySheet.data[0][9], 'EXPO_B');
+assert.equal(legacySheet.data[0][10], '另一場活動');
+assert.match(context.processSalesGroupMessage(activityTime, 'unknown-activity', 'line-a', '到點/活動支援/UNKNOWN/0'), /不在今日可用名單/);
+
+// 活動名稱快照及雙寫補齊不可因後續設定變更而消失。
+activitySheet.data = [[...expoA.slice(0, 1), '活動改名後', ...expoA.slice(2)]];
+assert.equal(legacySheet.data.find(row => row[1] === 'activity-arrival-a')[10], '世貿電器展');
+newSheet.data = [];
+const sync = context.syncSalesDutyHistoryToNew();
+assert.equal(sync.missingAfter, 0);
+assert.equal(newSheet.data.length, legacySheet.data.length);
+assert.equal(newSheet.data.find(row => row[1] === 'activity-arrival-a')[10], '世貿電器展');
+assert.equal(newSheet.data.find(row => row[1] === 'activity-b-arrival')[9], 'EXPO_B');
+const legacyBeforeNewOnly = legacySheet.data.length;
+context.setSalesDutyWriteMode('NEW_ONLY');
+assert.match(context.processSalesGroupMessage(activityTime, 'activity-new-only', 'line-a', '下班/活動支援/0/0'), /下班打卡成功/);
+assert.equal(legacySheet.data.length, legacyBeforeNewOnly);
+assert.equal(newSheet.data[0][9], 'EXPO_A');
+assert.equal(newSheet.data[0][10], '活動改名後');
+context.enableSalesDutyDualWrite();
+failNewAccess = true;
+assert.match(context.processSalesGroupMessage(activityTime, 'activity-new-outage', 'line-a', '下班/活動支援/12/2'), /下班打卡成功/);
+assert.equal(legacySheet.data[0][9], 'EXPO_A');
+failNewAccess = false;
+context.syncSalesDutyHistoryToNew();
+assert.equal(newSheet.data.filter(row => row[1] === 'activity-new-outage').length, 1);
+
+const countBeforeUnavailable = legacySheet.data.length;
+activitySheet.data = [[...expoA.slice(0, 7), false]];
+assert.match(context.processSalesGroupMessage(activityTime, 'activity-disabled', 'line-a', '到點/活動支援/0'), /沒有可填報/);
+activitySheet.data = [expoA, expoA];
+assert.match(context.processSalesGroupMessage(activityTime, 'activity-duplicate-config', 'line-a', '到點/活動支援/0'), /無法確認活動設定/);
+assert.equal(legacySheet.data.length, countBeforeUnavailable, '停用或歧義設定不得降級成無活動ID的普通店勤務');
+assert.equal(context.recordSalesData(activityTime, 'missing-activity-metadata', 'line-a', '正式人員甲', '活動支援', '到點', 0), false);
+assert.equal(legacySheet.data.length, countBeforeUnavailable);
+assert.equal(JSON.stringify(memberSheet.data), originalMembers, '不得修改人員或原店點白名單');
+
+const collisionSheet = makeSheet('collision');
+collisionSheet.header[9] = '既有其他欄位';
+assert.throws(() => context.writeSalesDutyRow_(collisionSheet, [new Date(activityTime), 'collision', '甲', '活動支援', '到點', 0, null, null, new Date(), 'EXPO_A', '展場']), /拒絕覆寫/);
+assert.equal(collisionSheet.data.length, 0);
+const narrowSheet = makeSheet('narrow');
+narrowSheet.maxColumns = 9;
+context.writeSalesDutyRow_(narrowSheet, [new Date(activityTime), 'narrow', '甲', '活動支援', '到點', 0, null, null, new Date(), 'EXPO_A', '展場']);
+assert.equal(narrowSheet.maxColumns, 11, '窄表須先增欄才能安全附加活動欄位');
+assert.equal(narrowSheet.data[0][9], 'EXPO_A');
+
+console.log('Sales shift verification passed: legacy rules, dual-write, activity eligibility, date and activity isolation, shared snapshots and safe schema extension.');
