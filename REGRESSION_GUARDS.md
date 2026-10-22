@@ -88,3 +88,5 @@
 - 身分仍須正式啟用且綁定本人；配對按台北日期與本人，不借用別人或前一天到點。下班保存當天全場累計快照，個人成交另填銷售表；不把多人快照相加。A:I與雙寫／NEW_ONLY不變，J:K保留固定歸屬，窄表先增欄，既有尾欄衝突拒覆寫。
 - 自動守門：verify_sales_shift在設定表不存在且讀取即拋錯的環境，驗當日與跨月多人勤務、重複、身分、配對、台數、雙寫補齊及schema；讀設定次數必須0。verify_webhook_batch與verify_merch_alert_gateway均須通過；不送真LINE或寫正式勤務。
 - 首次納入：本次通用活動支援修正候選；部署狀態以PROJECT_STATE為準，不能把本地測試當已正式啟用。
+
+- LB-RG-009 正式發布：固定webhook @62、runtime 3ff4e80，五檔雲端hash一致，URL／權限不變，空事件HTTP200，不發群組測試訊息。收據docs/GENERIC_ACTIVITY_SUPPORT_RELEASE_20261022.json。

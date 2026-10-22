@@ -2,6 +2,14 @@
 
 更新：2026-10-22（Asia/Taipei）。本檔為 LINE 獨立 repo 的唯一目前狀態快照。
 
+## 通用活動支援已正式啟用（固定 webhook @62）
+
+- Sam核准候選3ff4e806adb4f0a9bc3115533e19c8691b0fe6c4後，已push並將原固定webhook由@61更新@62。Main批次修復、Reminder、MerchAlert及manifest不變，只有Sales功能修正；五個雲端來源hash相同，原URL／權限保留，空事件HTTP200，不冒稱真打卡測試。
+- 固定到點/活動支援/初始台數、下班/活動支援/總台數/三星台數；不用每場事前建立名稱、日期或位置，不讀活動設定。本人正式身分、同日配對、欄位保護與全場累計口徑保留。個人銷量來自本人銷售表，不拿多人全場快照相加。
+- 三組本機守門通過，不發群組測試訊息；日常訊息仍由人員正常使用。發LINE預設使用LINEBOT，只有Sam明確指定才可用其個人帳號。
+- 主repo銷售／主管已同步上線7d18ea9，正式站Chrome390×844 TEST送出、Google及receipt讀回與精準清理完成。證據.codex-tmp/generic-support-20261022/與主repo output/generic-support-20261022/；公開收據docs/GENERIC_ACTIVITY_SUPPORT_RELEASE_20261022.json。
+- 本輪沒有修改真勤務資料；先前10月補正稽核dirty及原始聊天保留，未混入此發布commit。writer codex-generic-sales-support-release-20261022收工釋放。
+
 ## 本輪範圍
 
 - Sam 明確要求修正銷售群組報到漏回，沿用原固定 webhook 發布。

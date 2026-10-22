@@ -1,0 +1,40 @@
+{
+  "schema": "line-generic-activity-support-release-v1",
+  "publishedAt": "2026-10-22T10:52:38.201Z",
+  "runtimeCommit": "3ff4e806adb4f0a9bc3115533e19c8691b0fe6c4",
+  "fixedWebhookVersion": 62,
+  "previousVersion": 61,
+  "cloudSourceChecks": [
+    {
+      "name": "Main",
+      "sha256": "a2cf97d159b8355f4be056c0b7aa51b42906e819108c2505933d2a555fbb9c4f"
+    },
+    {
+      "name": "Reminder",
+      "sha256": "7471365a46e16530e6662df31ed2a3d32441b9b465beaa603ffd6777fa3d8cc5"
+    },
+    {
+      "name": "Sales",
+      "sha256": "92748af7a57cabc1e89b7fb08eae261b298151a7adef845981345a69b699204b"
+    },
+    {
+      "name": "MerchAlert",
+      "sha256": "ab4e98b5bf33c55d56c82743d20c6922b2565e7b99d4df4d348d2b3184f796a1"
+    },
+    {
+      "name": "appsscript",
+      "sha256": "729a4c61bc65411f221c76ce80d368e477374cd3670f8f95cad5e9fc990ec5f0"
+    }
+  ],
+  "webhookUrlAndAccessUnchanged": true,
+  "emptyEventProbe": {
+    "status": 200,
+    "events": 0,
+    "businessWrites": 0,
+    "lineMessagesSent": 0,
+    "bodyForm": "HtmlService-userHtml-OK"
+  },
+  "guardsPassed": 3,
+  "personalLineMessagesSent": 0,
+  "evidence": ".codex-tmp/generic-support-20261022/"
+}
