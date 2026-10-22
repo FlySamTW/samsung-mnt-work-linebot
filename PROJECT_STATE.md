@@ -11,11 +11,11 @@
 
 ## 目前正式
 
-- 修正前固定 webhook 為 @60，runtime c9e1538；正式發布讀回證據為 `.codex-tmp/activity-support-20261022/`。
+- 固定 webhook 已由 @60 更新 @61，runtime候選 `821c2de9395782b631a588b5d1b6e0b6b15223b9`；2026-10-22 17:22:20正式讀回完成。
 - 新工作簿 LINE勤務 已連通。LINE Developers 實際 URL 直接指本 GAS 固定 deployment，不經 Zeabur。
-- 本輪候選尚待同一固定 webhook 發布及來源 hash 讀回；不得把本機測試當正式已上線。
+- 五個雲端來源hash與固定候選一致；只有Main產品程式變更，Reminder／Sales／MerchAlert／manifest保持原來源。原URL、ANYONE_ANONYMOUS與USER_DEPLOYING均相同。
 
-## 已完成的候選
+## 已上線修正
 
 - Main 對整批事件逐筆處理：照片／非文字只略過該筆，後面的文字及其他人員繼續處理。
 - 已保存的訊息依 ALL 訊息 ID 略過；首筆重複不再直接結束整批。未曾收過的重送可處理一次。
@@ -34,8 +34,10 @@
 
 - 固定候選 freeze 後，只上傳五個既有 Apps Script 原檔；測試及 `.codex-tmp` 不得上傳。
 - 發布前比對 @60 及雲端 HEAD 均等於原基線，防止蓋掉別人的雲端修改。
-- 發布後讀回固定 deployment 版號／來源五檔 hash／原 URL與 access，再以空 events 公開 POST 驗 HTTP200/OK。
+- 已讀回固定版號61／來源五檔hash／原URL與access；空events公開POST回HTTP200，HtmlService userHtml為OK，沒有業務寫入或LINE發送。
+- 更新API回61後第一次GET短暫仍回60，守門停止；後續只做唯讀重查確認61，沒有重複上傳／建立版本／部署。第一次探測誤要求純文字OK，修正本機驗證器以讀取既有HtmlService包裝的userHtml後通過，產品未因此重改。
 - 不主動向銷售群組發測試訊息。正式現場的新報到回覆尚待自然事件確認，不把空事件探測當真打卡驗收。
 - 回復方式：同一固定 deployment 改回 @60；不換 webhook、不重設金鑰或工作簿。
-- 證據及檢查點 `.codex-tmp/webhook-batch-20261022/`；先前調查位於商化 repo `.codex-tmp/line-zhisheng-20261022/`。
-- 本 repo 只由 codex-line-batch-fix-20261022 寫入。商化 repo 目前由另一項 Node security 工作持鎖，本輪不修改其產品／狀態檔。
+- 證據 `.codex-tmp/webhook-batch-20261022/{candidate.json,created-version.json,deployment-proof.json,readback-observations.json,verify_*.log}`；先前調查位於商化repo `.codex-tmp/line-zhisheng-20261022/`。
+- 程式修正與正式發布完成；現場自然新訊息尚無本輪送達收據。未重送／補造致昇16:31或16:36舊勤務，舊缺漏仍需可稽核的個別補正，不得假稱已回補。
+- 本repo由codex-line-batch-fix-20261022單一寫入並於收尾釋放。商化repo另項Node security工作持鎖，本輪不覆蓋其產品／狀態檔；本檔為LINE最新正式狀態，商化repo先前「未修改正式」段落是修正前調查狀態。
